@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(claude-api)",
+      "Skill(claude-api:*)",
+      "Bash(npm run *)",
+      "Read(//home/brianfoo/venv/**)",
+      "Bash(~/venv/bin/python --version)",
+      "Read(//home/brianfoo/**)",
+      "Bash(/home/brianfoo/child-safe-ai/bin/python --version)",
+      "Bash(curl -s --max-time 5 localhost:5000/health)",
+      "Bash(curl -s --max-time 6 http://136.109.141.241:5000/health)",
+      "Bash(gcloud compute *)",
+      "Bash(echo \"=== build exit: $? ===\")",
+      "Bash(env)",
+      "Bash(gcloud config *)",
+      "Bash(gcloud auth *)",
+      "Bash(sqlite3 ~/.config/gcloud/credentials.db 'select account_id from credentials;')",
+      "Bash(gcloud services *)",
+      "Bash(node dist/index.js)",
+      "Bash(curl -s http://localhost:5000/health)",
+      "Bash(curl -s -m 8 http://34.53.116.202:5000/health)",
+      "Bash(curl -s -H 'Metadata-Flavor: Google' 'http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip')",
+      "Bash(curl -s http://34.53.116.202:5000/health)",
+      "Bash(curl -s -c /tmp/claude-1000/-home-brianfoo-code-child-safe-ai/918e19d0-f8ee-4d53-b784-bfb8687e901e/scratchpad/cookies.txt -o /dev/null -w '%{http_code} -> %{redirect_url}\\\\n' -X POST http://34.53.116.202:5000/login -d 'username=HarborHouse&password=hhai123!')",
+      "Bash(curl -s -b /tmp/claude-1000/-home-brianfoo-code-child-safe-ai/918e19d0-f8ee-4d53-b784-bfb8687e901e/scratchpad/cookies.txt -o /dev/null -w '%{http_code}\\\\n' http://34.53.116.202:5000/images)",
+      "Bash(curl -s -o /dev/null -w '%{http_code}\\\\n' -X POST http://34.53.116.202:5000/v1/images -H 'content-type: application/json' -d '{\"prompt\":\"a cat\"}')",
+      "Bash(time curl -s -b /tmp/claude-1000/-home-brianfoo-code-child-safe-ai/918e19d0-f8ee-4d53-b784-bfb8687e901e/scratchpad/cookies.txt -X POST http://34.53.116.202:5000/v1/images -H 'content-type: application/json' -d '{\"prompt\":\"A friendly dragon reading a book under a rainbow\"}' -o /tmp/claude-1000/-home-brianfoo-code-child-safe-ai/918e19d0-f8ee-4d53-b784-bfb8687e901e/scratchpad/imgresp.json -w 'HTTP %{http_code}\\\\n')",
+      "Bash(python3 -)"
+    ]
+  }
+}
