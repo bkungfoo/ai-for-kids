@@ -1,20 +1,27 @@
-import { Router, type Response } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { geminiProvider } from '../providers/gemini.js';
+import { currentUser } from '../middleware/requireAuth.js';
+import { imageProviderFor } from '../providers/imageProvider.js';
+import type { ImageEngine } from '../providers/types.js';
 import { runGuardedGeneration } from '../safety/guardedGeneration.js';
 import { guardText } from '../safety/pipeline.js';
 import {
   addPage,
   createBook,
   deleteBook,
+  discardSnapshot,
   getBook,
   listBooks,
   publishBook,
+  removeEndPage,
+  revertBook,
+  snapshotBook,
   updateAuthors,
   updateCover,
   updatePage,
   type Book,
   type BookImage,
+  type BookPage,
 } from '../books/store.js';
 import { optionalString, requireString, ValidationError } from './validate.js';
 
@@ -28,14 +35,6 @@ import { optionalString, requireString, ValidationError } from './validate.js';
  * The image prompt is deliberately separate from the story sentences.
  */
 export const booksApiRouter = Router();
-
-/** Consistent style wrapper for every storybook illustration. */
-function illustrationPrompt(subject: string): string {
-  return (
-    'Illustration for a children\'s picture storybook, in a bright, colorful, ' +
-    `friendly art style, no text or lettering in the image: ${subject}`
-  );
-}
 
 /**
  * Front-cover prompt. Unlike page illustrations, the cover DOES contain text:
@@ -57,15 +56,41 @@ function coverPrompt(title: string, userPrompt?: string): string {
 const STORY_CONTEXT_MAX_CHARS = 2500;
 
 /**
- * Illustration prompt for a story page, carrying the narrative so far so the
- * image stays consistent with earlier events (a broken oven stays broken).
+ * Cover + up to five recent page images. Nano Banana Pro accepts up to 14
+ * references; we keep it small (the cover as the main-character anchor, plus the
+ * latest pages) to bound the request while staying visually consistent.
  */
-function pageIllustrationPrompt(
+const MAX_REFERENCE_IMAGES = 6;
+
+/**
+ * The scene to draw for one page, with reinforcement instructions. The narrative
+ * so far is passed SEPARATELY (as `context`) and earlier pictures as reference
+ * images, so a stateless engine can still keep characters and objects consistent.
+ */
+function pageScenePrompt(
   book: Book,
-  priorTexts: string[],
   pageText: string,
   imagePrompt: string,
+  hasReferences: boolean,
 ): string {
+  const reinforcement = hasReferences
+    ? 'You are also given reference pictures from earlier pages of THIS SAME book. ' +
+      'Copy the exact same characters (their faces, hair, skin tone and clothing), objects and ' +
+      'art style from those reference pictures so the whole book looks consistent — including any ' +
+      'changes that already happened to them (for example, a scraped knee stays scraped).'
+    : 'Keep the picture consistent with the story so far — the same characters, places and ' +
+      'objects, including any changes that happened to them in earlier pages.';
+  return (
+    `Illustration for one page of a children's picture storybook titled "${book.title}", ` +
+    'in a bright, colorful, friendly art style. No text, words or lettering in the image.\n' +
+    `This page's story: ${pageText}\n` +
+    `Draw this scene: ${imagePrompt}\n` +
+    reinforcement
+  );
+}
+
+/** The narrative so far (most recent pages that fit the budget), or undefined. */
+function storyContext(priorTexts: string[]): string | undefined {
   const parts: string[] = [];
   let used = 0;
   for (let i = priorTexts.length - 1; i >= 0; i--) {
@@ -74,18 +99,21 @@ function pageIllustrationPrompt(
     parts.unshift(t);
     used += t.length;
   }
-  const soFar = parts.length
-    ? `\nThe story so far (earlier pages):\n${parts.join('\n')}\n`
-    : '';
-  return (
-    `Illustration for one page of a children's picture storybook titled "${book.title}", ` +
-    'in a bright, colorful, friendly art style, no text or lettering in the image.' +
-    soFar +
-    `\nThis page's story: ${pageText}\n` +
-    `\nDraw this scene: ${imagePrompt}\n` +
-    'Keep the picture consistent with the story so far — the same characters, places and ' +
-    'objects, including any changes that happened to them in earlier pages.'
-  );
+  return parts.length ? `The story so far (earlier pages):\n${parts.join('\n')}` : undefined;
+}
+
+/**
+ * Earlier pictures to hand the model as visual references: the cover (main
+ * character anchor) followed by the most recent page images, capped.
+ */
+function referenceImages(book: Book, priorPages: BookPage[]): BookImage[] {
+  const refs: BookImage[] = [];
+  if (book.cover) refs.push(book.cover);
+  const pageImages = priorPages
+    .map((p) => p.image)
+    .filter((img): img is BookImage => Boolean(img));
+  refs.push(...pageImages.slice(-(MAX_REFERENCE_IMAGES - refs.length)));
+  return refs;
 }
 
 /** Slim listing shape: cover + counts, not every page image. */
@@ -117,6 +145,31 @@ function parseAuthors(body: unknown): string[] {
   return authors;
 }
 
+/** Optional per-book illustration engine from the request body. */
+function parseImageEngine(body: unknown): ImageEngine | undefined {
+  const raw = optionalString(body, 'imageEngine', { maxLength: 20 });
+  if (raw === undefined) return undefined;
+  if (raw !== 'replicate' && raw !== 'gemini') {
+    throw new ValidationError('"imageEngine" must be "replicate" or "gemini"');
+  }
+  return raw;
+}
+
+/**
+ * A page-drawing payload: `{ drawing }` is either a PNG data URL (the child's
+ * doodle overlay) or null to erase it. Rejects anything that isn't a
+ * base64-encoded PNG data URL.
+ */
+function parseDrawing(body: unknown): BookImage | null {
+  const value = (body as { drawing?: unknown } | undefined)?.drawing;
+  if (value === null || value === undefined) return null; // clear the drawing
+  if (typeof value !== 'string') throw new ValidationError('"drawing" must be a data URL or null');
+  if (value.length > 5_000_000) throw new ValidationError('That drawing is too large to save');
+  const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(value);
+  if (!match) throw new ValidationError('"drawing" must be a PNG data URL');
+  return { mimeType: 'image/png', dataBase64: match[1]! };
+}
+
 /** 409 helper: published books are frozen. */
 function publishedConflict(res: Response): void {
   res.status(409).json({ ok: false, error: 'This book is published and can no longer be changed' });
@@ -128,12 +181,26 @@ function firstImage(result: unknown): BookImage | null {
   return images && images.length > 0 ? images[0]! : null;
 }
 
+/**
+ * Fetch a book only if the signed-in account owns it — the basis of per-account
+ * "My storybooks". Returns undefined otherwise, so callers respond 404 and
+ * never reveal that another user's book exists (let alone let it be edited).
+ */
+async function getOwnedBook(id: string, user: string | undefined): Promise<Book | undefined> {
+  if (!user) return undefined;
+  const book = await getBook(id);
+  return book && book.owner === user ? book : undefined;
+}
+
 // --- Shelf -------------------------------------------------------------------
 booksApiRouter.get(
   '/',
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    // "My storybooks" is private to the signed-in account.
+    const user = currentUser(req);
     const books = await listBooks();
-    res.json({ ok: true, books: books.map(summarize) });
+    const mine = books.filter((b) => b.owner === user);
+    res.json({ ok: true, books: mine.map(summarize) });
   }),
 );
 
@@ -144,6 +211,9 @@ booksApiRouter.post(
     const title = requireString(req.body, 'title', { maxLength: 80 });
     const authors = parseAuthors(req.body);
     const userCoverPrompt = optionalString(req.body, 'coverPrompt', { maxLength: 1000 });
+    // The child picks who paints the pictures when starting the book; the
+    // choice sticks for every illustration in it (cover, pages, repaints).
+    const imageEngine = parseImageEngine(req.body);
 
     // Title and author names are shown back on the cover — moderate them first.
     const titleVerdict = await guardText([title, ...authors], 'input');
@@ -158,8 +228,10 @@ booksApiRouter.post(
       return;
     }
 
-    // Cover image goes through the full guarded pipeline.
-    const outcome = await runGuardedGeneration(geminiProvider, {
+    // Cover image goes through the full guarded pipeline. It is the first
+    // picture in the book, so it has no earlier context or references — it sets
+    // the look that later pages copy.
+    const outcome = await runGuardedGeneration(imageProviderFor(imageEngine), {
       prompt: coverPrompt(title, userCoverPrompt),
     });
     if (outcome.status !== 200) {
@@ -167,7 +239,14 @@ booksApiRouter.post(
       return;
     }
 
-    const book = await createBook(title, authors, firstImage(outcome.body.result), userCoverPrompt);
+    const book = await createBook(
+      title,
+      authors,
+      firstImage(outcome.body.result),
+      userCoverPrompt,
+      imageEngine,
+      currentUser(req),
+    );
     res.status(201).json({ ok: true, book: summarize(book) });
   }),
 );
@@ -179,14 +258,14 @@ booksApiRouter.post(
     const bookId = req.params.id ?? '';
     const userCoverPrompt = requireString(req.body, 'coverPrompt', { maxLength: 1000 });
 
-    const book = await getBook(bookId);
+    const book = await getOwnedBook(bookId, currentUser(req));
     if (!book) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
     if (book.status === 'published') return publishedConflict(res);
 
-    const outcome = await runGuardedGeneration(geminiProvider, {
+    const outcome = await runGuardedGeneration(imageProviderFor(book.imageEngine), {
       prompt: coverPrompt(book.title, userCoverPrompt),
     });
     if (outcome.status !== 200) {
@@ -214,7 +293,9 @@ booksApiRouter.get(
   '/:id',
   asyncHandler(async (req, res) => {
     const book = await getBook(req.params.id ?? '');
-    if (!book) {
+    // The owner may read their own book; anyone signed in may read a PUBLISHED
+    // book (the shared library). Otherwise 404 — don't reveal it exists.
+    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
@@ -230,7 +311,7 @@ booksApiRouter.post(
     const text = requireString(req.body, 'text', { maxLength: 2000 });
     const imagePrompt = requireString(req.body, 'imagePrompt', { maxLength: 1000 });
 
-    const existing = await getBook(bookId);
+    const existing = await getOwnedBook(bookId, currentUser(req));
     if (!existing) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
@@ -250,15 +331,15 @@ booksApiRouter.post(
       return;
     }
 
-    // The illustration runs through the full guarded pipeline, with the story
-    // so far as context so the picture stays consistent with earlier events.
-    const outcome = await runGuardedGeneration(geminiProvider, {
-      prompt: pageIllustrationPrompt(
-        existing,
-        existing.pages.map((p) => p.text),
-        text,
-        imagePrompt,
-      ),
+    // The illustration runs through the full guarded pipeline. We hand the
+    // engine the story so far (context) and the earlier pictures (references) so
+    // characters, objects and settings stay consistent from page to page.
+    const priorPages = existing.pages;
+    const refs = referenceImages(existing, priorPages);
+    const outcome = await runGuardedGeneration(imageProviderFor(existing.imageEngine), {
+      prompt: pageScenePrompt(existing, text, imagePrompt, refs.length > 0),
+      context: storyContext(priorPages.map((p) => p.text)),
+      referenceImages: refs,
     });
     if (outcome.status !== 200) {
       res.status(outcome.status).json(outcome.body);
@@ -286,7 +367,7 @@ booksApiRouter.post(
     const index = Number.parseInt(req.params.index ?? '', 10);
     const imagePrompt = requireString(req.body, 'imagePrompt', { maxLength: 1000 });
 
-    const book = await getBook(bookId);
+    const book = await getOwnedBook(bookId, currentUser(req));
     const page = Number.isInteger(index) && index >= 0 ? book?.pages[index] : undefined;
     if (!book || !page) {
       res.status(404).json({ ok: false, error: 'Page not found' });
@@ -294,13 +375,12 @@ booksApiRouter.post(
     }
     if (book.status === 'published') return publishedConflict(res);
 
-    const outcome = await runGuardedGeneration(geminiProvider, {
-      prompt: pageIllustrationPrompt(
-        book,
-        book.pages.slice(0, index).map((p) => p.text),
-        page.text,
-        imagePrompt,
-      ),
+    const priorPages = book.pages.slice(0, index);
+    const refs = referenceImages(book, priorPages);
+    const outcome = await runGuardedGeneration(imageProviderFor(book.imageEngine), {
+      prompt: pageScenePrompt(book, page.text, imagePrompt, refs.length > 0),
+      context: storyContext(priorPages.map((p) => p.text)),
+      referenceImages: refs,
     });
     if (outcome.status !== 200) {
       res.status(outcome.status).json(outcome.body);
@@ -322,12 +402,86 @@ booksApiRouter.post(
   }),
 );
 
+// --- Edit a page's story words (the picture stays as it is) --------------------
+booksApiRouter.patch(
+  '/:id/pages/:index/text',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const index = Number.parseInt(req.params.index ?? '', 10);
+    const text = requireString(req.body, 'text', { maxLength: 2000 });
+
+    const book = await getOwnedBook(bookId, currentUser(req));
+    const page = Number.isInteger(index) && index >= 0 ? book?.pages[index] : undefined;
+    if (!book || !page) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+    if (page.isEnd) {
+      res.status(409).json({ ok: false, error: 'The "The End" page cannot be changed' });
+      return;
+    }
+
+    // The new story words are stored and displayed back — moderate them first.
+    const verdict = await guardText([text], 'input');
+    if (!verdict.allowed) {
+      res.status(403).json({
+        ok: false,
+        blocked: true,
+        stage: 'input',
+        message: verdict.childMessage,
+        verdict: { severity: verdict.severity, categories: verdict.categories },
+      });
+      return;
+    }
+
+    const updated = await updatePage(bookId, index, { text });
+    if (!updated) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    res.json({ ok: true, book: updated, pageIndex: index });
+  }),
+);
+
+// --- Save (or clear) the child's pen drawing over a page's picture -------------
+booksApiRouter.put(
+  '/:id/pages/:index/drawing',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const index = Number.parseInt(req.params.index ?? '', 10);
+    const drawing = parseDrawing(req.body);
+
+    const book = await getOwnedBook(bookId, currentUser(req));
+    const page = Number.isInteger(index) && index >= 0 ? book?.pages[index] : undefined;
+    if (!book || !page) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+    // Drawing is only offered once a page has both its words and its picture.
+    if (page.isEnd || !page.text || !page.image) {
+      res.status(409).json({ ok: false, error: 'This page cannot be drawn on yet' });
+      return;
+    }
+
+    // The overlay is the child's own pen strokes (no AI, no text), so it isn't
+    // run through the generation-safety pipeline.
+    const updated = await updatePage(bookId, index, { drawing });
+    if (!updated) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    res.json({ ok: true, book: updated, pageIndex: index });
+  }),
+);
+
 // --- Close the book with a "The End" page --------------------------------------
 booksApiRouter.post(
   '/:id/end',
   asyncHandler(async (req, res) => {
     const bookId = req.params.id ?? '';
-    const existing = await getBook(bookId);
+    const existing = await getOwnedBook(bookId, currentUser(req));
     if (!existing) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
@@ -347,6 +501,68 @@ booksApiRouter.post(
   }),
 );
 
+// --- Remove the "The End" page so the story can keep going ----------------------
+booksApiRouter.delete(
+  '/:id/end',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const existing = await getOwnedBook(bookId, currentUser(req));
+    if (!existing) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (existing.status === 'published') return publishedConflict(res);
+    if (!existing.pages.at(-1)?.isEnd) {
+      res.status(409).json({ ok: false, error: 'This book has no "The End" page to remove' });
+      return;
+    }
+    const book = await removeEndPage(bookId);
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    res.json({ ok: true, book });
+  }),
+);
+
+// --- Edit session: snapshot on open, restore on cancel --------------------------
+// Reopening a finished book for editing snapshots it first, so "cancel" can
+// throw away every change (words, pictures, authors) in one move.
+booksApiRouter.post(
+  '/:id/edit-session',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+    const ok = await snapshotBook(bookId);
+    if (!ok) {
+      res.status(500).json({ ok: false, error: 'Could not start editing — try again' });
+      return;
+    }
+    res.json({ ok: true });
+  }),
+);
+
+booksApiRouter.post(
+  '/:id/edit-session/cancel',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+    // No snapshot (e.g. already cancelled) → the book is returned as-is.
+    const restored = await revertBook(bookId);
+    res.json({ ok: true, book: restored ?? book });
+  }),
+);
+
 // --- Update the "written by" author names (title page) --------------------------
 booksApiRouter.patch(
   '/:id/authors',
@@ -354,7 +570,7 @@ booksApiRouter.patch(
     const bookId = req.params.id ?? '';
     const authors = parseAuthors(req.body);
 
-    const existing = await getBook(bookId);
+    const existing = await getOwnedBook(bookId, currentUser(req));
     if (!existing) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
@@ -389,11 +605,19 @@ booksApiRouter.patch(
 booksApiRouter.post(
   '/:id/publish',
   asyncHandler(async (req, res) => {
-    const book = await publishBook(req.params.id ?? '');
+    const bookId = req.params.id ?? '';
+    // Only the owner may publish their own book.
+    if (!(await getOwnedBook(bookId, currentUser(req)))) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    const book = await publishBook(bookId);
     if (!book) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
+    // Publishing keeps the edits — any pending edit-session snapshot is stale.
+    await discardSnapshot(book.id);
     res.json({ ok: true, book: summarize(book) });
   }),
 );
@@ -402,11 +626,18 @@ booksApiRouter.post(
 booksApiRouter.delete(
   '/:id',
   asyncHandler(async (req, res) => {
-    const ok = await deleteBook(req.params.id ?? '');
+    const bookId = req.params.id ?? '';
+    // Only the owner may delete their own book.
+    if (!(await getOwnedBook(bookId, currentUser(req)))) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    const ok = await deleteBook(bookId);
     if (!ok) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
+    await discardSnapshot(bookId);
     res.json({ ok: true });
   }),
 );

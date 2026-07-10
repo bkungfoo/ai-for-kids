@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
-import { verifyCredentials } from '../auth/credentials.js';
+import { authenticate } from '../auth/credentials.js';
 import { createSession, destroySession, getSession } from '../auth/sessions.js';
 import { parseCookies } from '../auth/cookies.js';
 import { loginPage } from './loginPage.js';
@@ -32,14 +32,15 @@ authRouter.get('/login', (req: Request, res: Response) => {
 // Handle credential submission (form-encoded).
 authRouter.post('/login', (req: Request, res: Response) => {
   const { username, password } = (req.body ?? {}) as Record<string, unknown>;
-  if (!verifyCredentials(username, password)) {
+  const matchedUser = authenticate(username, password);
+  if (!matchedUser) {
     logger.warn('failed login attempt', {
       username: typeof username === 'string' ? username : '<invalid>',
     });
     res.redirect('/login?error=1');
     return;
   }
-  const token = createSession(config.auth.username);
+  const token = createSession(matchedUser);
   res.cookie(config.auth.cookieName, token, cookieOptions);
   res.redirect('/');
 });

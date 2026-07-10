@@ -6,9 +6,7 @@ import { createSession, destroySession } from '../auth/sessions.js';
 import { parseCookies } from '../auth/cookies.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { isOperator, requireOperatorApi } from '../middleware/requireAuth.js';
-import { geminiProvider } from '../providers/gemini.js';
-import { runReviewGeneration } from '../safety/guardedGeneration.js';
-import { requireString, optionalString, ValidationError } from './validate.js';
+import { listBlocked } from '../safety/blockedStore.js';
 
 /**
  * Adult-only operator review area. This is deliberately SEPARATE from the
@@ -71,28 +69,22 @@ reviewRouter.post('/review/logout', (req: Request, res: Response) => {
   res.redirect('/review');
 });
 
-// --- Review API: generate an image and return it WITH full verdicts ----------
-reviewRouter.post(
-  '/v1/review/images',
+// --- Review API: the gallery of images the safety pipeline blocked -----------
+// Read-only: it surfaces what children already tried and were refused, rather
+// than letting the operator generate anything new. Entries are recorded by the
+// guarded pipeline (see safety/blockedStore.ts).
+reviewRouter.get(
+  '/v1/review/blocked',
   requireOperatorApi,
   asyncHandler(async (req, res) => {
-    const reqBody = {
-      prompt: requireString(req.body, 'prompt', { maxLength: 2000 }),
-      model: optionalString(req.body, 'model', { maxLength: 100 }),
-    };
-    const outcome = await runReviewGeneration(geminiProvider, reqBody);
-    res.status(outcome.status).json(outcome.body);
+    const raw = Number.parseInt(String(req.query.limit ?? ''), 10);
+    const limit = Number.isFinite(raw) ? Math.min(50, Math.max(1, raw)) : 20;
+    const entries = await listBlocked(limit);
+    // Audit trail: an operator viewed content the child app blocked.
+    logger.warn('operator viewed blocked-image gallery', { count: entries.length });
+    res.json({ ok: true, entries });
   }),
 );
-
-// Local validation-error handler (mirrors the /v1 API router).
-reviewRouter.use((err: unknown, _req: Request, res: Response, next: (e?: unknown) => void) => {
-  if (err instanceof ValidationError) {
-    res.status(400).json({ ok: false, error: err.message });
-    return;
-  }
-  next(err);
-});
 
 // --- HTML ------------------------------------------------------------------
 
@@ -162,21 +154,21 @@ function reviewConsolePage(): string {
 <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Operator review — Harbor House</title>
 <style>${SHELL_STYLE}
-  .banner { margin: 0 0 16px; padding: 12px 14px; border-radius: 10px; font-size: 14px; font-weight: 600; }
-  .banner.blocked { color: #ffd0a8; background: #3a2410; border: 1px solid #6b451d; }
-  .banner.allowed { color: #b7e6c2; background: #16301f; border: 1px solid #2c5b3a; }
-  .stages { list-style: none; padding: 0; margin: 6px 0 0; }
-  .stage { padding: 10px 12px; border-radius: 9px; margin-top: 8px; font-size: 13px;
-    background: #0f1b24; border: 1px solid #243845; }
-  .stage .head { display: flex; gap: 8px; align-items: center; font-weight: 700; text-transform: capitalize; }
+  .entry { margin-top: 16px; padding: 16px; border-radius: 12px;
+    background: #0f1b24; border: 1px solid #6b451d; }
+  .entry .head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    font-size: 13px; color: #9fb3bf; }
   .tag { font-size: 11px; font-weight: 700; border-radius: 6px; padding: 2px 7px; }
   .tag.block { color: #ffb4b4; background: #3a1a1a; }
-  .tag.ok { color: #b7e6c2; background: #16301f; }
-  .stage .cats { color: #cbb39a; margin-top: 4px; }
-  .stage .reason { color: #9fb3bf; margin-top: 4px; white-space: pre-wrap; word-break: break-word; }
-  #result img { margin-top: 16px; max-width: 100%; border-radius: 10px; display: block;
+  .tag.stage { color: #ffd0a8; background: #3a2410; }
+  .entry .cats { color: #cbb39a; margin-top: 8px; font-size: 13px; }
+  .entry .label { margin-top: 10px; font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .5px; color: #6f8694; }
+  .entry .text { color: #c9d6de; font-size: 13px; margin-top: 3px;
+    white-space: pre-wrap; word-break: break-word; }
+  .entry .reason { color: #9fb3bf; }
+  .entry img { margin-top: 12px; max-width: 100%; border-radius: 10px; display: block;
     border: 2px solid #6b451d; }
-  .caption { margin-top: 10px; font-size: 13px; color: #9fb3bf; }
   .status { margin-top: 16px; font-size: 14px; min-height: 20px; color: #9fb3bf; }
   .status.error { color: #ffb4b4; }
   .spinner { display: inline-block; width: 15px; height: 15px; vertical-align: -3px; margin-right: 8px;
@@ -193,18 +185,12 @@ function reviewConsolePage(): string {
   </header>
   <main>
     <div class="card">
-      <h1>Image review</h1>
-      <p class="sub">Generates an image and shows it <strong>with every safety verdict</strong>,
-        even when the child-facing app would block it. Blocked results are outlined in amber.</p>
-      <form id="form">
-        <label for="prompt">Prompt</label>
-        <textarea id="prompt" rows="3" maxlength="2000" required
-          placeholder="Describe the image to generate and review…"></textarea>
-        <button class="primary" id="go" type="submit">Generate &amp; review</button>
-      </form>
+      <h1>Blocked pictures</h1>
+      <p class="sub">Pictures the safety filters <strong>stopped before they reached a child</strong>,
+        with the prompt that caused them and the internal verdict. Newest first.</p>
+      <button class="primary" id="refresh" type="button">↻ Refresh</button>
       <div id="status" class="status" role="status" aria-live="polite"></div>
-      <div id="verdict"></div>
-      <div id="result"></div>
+      <div id="list"></div>
     </div>
   </main>
   <script>${reviewClientJs()}</script>
@@ -213,12 +199,9 @@ function reviewConsolePage(): string {
 
 function reviewClientJs(): string {
   return `
-  const form = document.getElementById('form');
-  const promptEl = document.getElementById('prompt');
-  const go = document.getElementById('go');
+  const refresh = document.getElementById('refresh');
   const statusEl = document.getElementById('status');
-  const verdictEl = document.getElementById('verdict');
-  const result = document.getElementById('result');
+  const list = document.getElementById('list');
 
   function setStatus(text, cls) {
     statusEl.className = 'status' + (cls ? ' ' + cls : '');
@@ -228,77 +211,69 @@ function reviewClientJs(): string {
     return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   }
 
-  function renderStages(stages) {
-    const items = stages.map(s => {
-      const tag = s.allowed
-        ? '<span class="tag ok">passed</span>'
-        : '<span class="tag block">blocked</span>';
-      const cats = (s.categories && s.categories.length)
-        ? '<div class="cats">Categories: ' + esc(s.categories.join(', ')) + ' · severity: ' + esc(s.severity) + '</div>'
-        : '';
-      const reason = s.reason ? '<div class="reason">' + esc(s.reason) + '</div>' : '';
-      return '<li class="stage"><div class="head">' + esc(s.stage) + ' ' + tag + '</div>' + cats + reason + '</li>';
-    }).join('');
-    return '<ul class="stages">' + items + '</ul>';
+  function section(label, text, extraCls) {
+    return '<div class="label">' + esc(label) + '</div>' +
+      '<div class="text' + (extraCls ? ' ' + extraCls : '') + '">' + esc(text) + '</div>';
   }
 
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const prompt = promptEl.value.trim();
-    if (!prompt) return;
-    go.disabled = true;
-    verdictEl.innerHTML = '';
-    result.innerHTML = '';
-    setStatus('<span class="spinner"></span>Generating and running safety checks…');
+  function renderEntry(e) {
+    const card = document.createElement('div');
+    card.className = 'entry';
+    const when = new Date(e.createdAt).toLocaleString();
+    let html =
+      '<div class="head">' +
+        '<span class="tag block">blocked</span>' +
+        '<span class="tag stage">' + esc(e.stage === 'image' ? 'SafeSearch' : 'output moderation') + '</span>' +
+        '<span>' + esc(when) + '</span>' +
+        '<span>· ' + esc(e.provider) + '</span>' +
+        '<span>· severity: ' + esc(e.severity) + '</span>' +
+      '</div>';
+    if (e.categories && e.categories.length) {
+      html += '<div class="cats">Categories: ' + esc(e.categories.join(', ')) + '</div>';
+    }
+    if (e.inputTexts && e.inputTexts.length) {
+      html += section('Prompt / context', e.inputTexts.join('\\n\\n'));
+    }
+    if (e.captions && e.captions.length) {
+      html += section('Model captions', e.captions.join(' '));
+    }
+    if (e.reason) {
+      html += section('Why it was blocked', e.reason, 'reason');
+    }
+    card.innerHTML = html;
+    for (const img of e.images || []) {
+      const el = document.createElement('img');
+      el.src = 'data:' + img.mimeType + ';base64,' + img.dataBase64;
+      el.alt = 'blocked image';
+      el.loading = 'lazy';
+      card.appendChild(el);
+    }
+    return card;
+  }
 
+  async function load() {
+    refresh.disabled = true;
+    setStatus('<span class="spinner"></span>Loading blocked pictures…');
+    list.innerHTML = '';
     try {
-      const res = await fetch('/v1/review/images', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt }),
-      });
+      const res = await fetch('/v1/review/blocked');
       const data = await res.json().catch(() => ({}));
-
       if (res.status === 401) { setStatus('Session ended. <a class="link" href="/review">Unlock again</a>.', 'error'); return; }
-      if (res.status === 404) { setStatus('Review area is disabled.', 'error'); return; }
-      if (!res.ok || !data.ok) {
-        setStatus(esc((data && data.error) || 'Generation failed (status ' + res.status + ').'), 'error');
+      if (!res.ok || !data.ok) { setStatus('Could not load (status ' + res.status + ').', 'error'); return; }
+      if (!data.entries.length) {
+        setStatus('No blocked pictures so far — nothing has been stopped by the image safety checks. ✓');
         return;
       }
-
-      setStatus('');
-      const banner = data.blocked
-        ? '<div class="banner blocked">⚠ This result WAS BLOCKED for the child-facing app. Shown here for operator review only.</div>'
-        : '<div class="banner allowed">✓ This result passed all safety checks.</div>';
-      verdictEl.innerHTML = banner + renderStages(data.stages || []);
-
-      const images = (data.result && data.result.images) || [];
-      const captions = (data.result && data.result.captions) || [];
-      if (!images.length) {
-        const note = document.createElement('p');
-        note.className = 'caption';
-        note.textContent = data.blocked
-          ? 'No image to show (blocked before any image was generated).'
-          : 'No image was returned.';
-        result.appendChild(note);
-      }
-      for (const img of images) {
-        const el = document.createElement('img');
-        el.src = 'data:' + img.mimeType + ';base64,' + img.dataBase64;
-        el.alt = prompt;
-        result.appendChild(el);
-      }
-      if (captions.length) {
-        const cap = document.createElement('p');
-        cap.className = 'caption';
-        cap.textContent = captions.join(' ');
-        result.appendChild(cap);
-      }
-    } catch (err) {
+      setStatus('Showing ' + data.entries.length + ' most recent blocked picture(s).');
+      for (const e of data.entries) list.appendChild(renderEntry(e));
+    } catch {
       setStatus('Could not reach the server. Try again.', 'error');
     } finally {
-      go.disabled = false;
+      refresh.disabled = false;
     }
-  });
+  }
+
+  refresh.addEventListener('click', load);
+  load();
   `;
 }

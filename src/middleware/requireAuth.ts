@@ -8,6 +8,12 @@ function isAuthed(req: Request): boolean {
   return getSession(token) !== undefined;
 }
 
+/** The signed-in child-app username, or undefined when not signed in. */
+export function currentUser(req: Request): string | undefined {
+  const token = parseCookies(req)[config.auth.cookieName];
+  return getSession(token)?.username;
+}
+
 /** True when the request carries a valid operator (review-area) session. */
 export function isOperator(req: Request): boolean {
   if (!config.review.enabled) return false;

@@ -22,7 +22,7 @@ child ──▶ gateway ──[input moderation]──▶ provider ──[output
 |--------------|-----------------------|----------------------------------|-----------|
 | `POST /v1/music`  | Suno             | music generation                 | prompt in; lyrics + title out |
 | `POST /v1/voice`  | ElevenLabs       | TTS / voice generation           | text in (audio out) |
-| `POST /v1/images` | Gemini / Nano Banana 2 | text-to-image              | prompt in; captions out; image via Vision SafeSearch |
+| `POST /v1/images` | Nano Banana Pro (Replicate) / Nano Banana 2 (Gemini) | text-to-image | prompt in; captions out; image via Vision SafeSearch |
 | `POST /v1/code`   | Claude Code      | "vibe coding" for kids           | prompt in; generated code out |
 
 Each provider is an adapter implementing a small interface
@@ -125,18 +125,66 @@ API (behind the child session, all content moderated):
 | `POST /v1/books/:id/pages` `{text, imagePrompt}` | moderate story text → guarded illustration → append page |
 | `DELETE /v1/books/:id` | remove a book |
 
+**Draw on the pictures.** In edit mode, a page that already has both its words
+and its AI picture shows a pen palette (pen + colors, eraser, clear) so a child
+can doodle on top of the illustration. The doodle is saved as a separate
+transparent PNG overlay (`page.drawing`) — the AI picture underneath is kept
+intact — via `PUT /v1/books/:id/pages/:index/drawing` (owner-only; `null` clears
+it). It isn't run through the generation-safety pipeline since it's the child's
+own pen strokes (no AI, no text). Not offered while the "change the words" or
+"change this picture" forms are open.
+
 Safety: titles and story text are moderated as *input* before being stored
 (they are displayed back); every illustration runs the full pipeline (input
-moderation → Gemini → output moderation → Vision SafeSearch). Books persist as
-JSON files under `data/books/`.
+moderation → image engine → output moderation → Vision SafeSearch). Books
+persist as JSON files under `data/books/`.
+
+### Illustration engine & cross-page consistency
+
+Storybook pictures are painted by one of two engines, selected with
+`STORY_IMAGE_PROVIDER`:
+
+- **`replicate` (default)** — **Nano Banana Pro** (Google Gemini 3 Pro Image),
+  hosted on Replicate. Needs `REPLICATE_API_TOKEN`.
+- **`gemini`** — **Nano Banana 2** (Gemini 3.1 Flash Image), called directly.
+  Cheaper. Needs `GEMINI_API_KEY`.
+
+If the selected engine isn't configured, the app falls back to the other one so
+it keeps working.
+
+Every image prompt **leads with a child-safety preamble** (before the story
+context, reference images, and scene description) instructing the model that
+the picture must be gentle and child-safe — reducing how many generations are
+lost to the downstream output-moderation/SafeSearch blocks.
+
+The Replicate API is **stateless** — it has no memory of earlier pictures — so
+we rebuild the context from the storybook on every call to keep characters,
+objects and settings consistent from page to page:
+
+- **prompt** — the scene to draw now, plus reinforcement instructions ("copy the
+  same characters, objects and art style from the reference pictures"), with the
+  **story so far** appended as extra context;
+- **reference images** — the earlier illustrations (the cover as the main
+  character anchor, plus the most recent pages, capped at 6), which Nano Banana
+  Pro copies faces, clothing, objects and style from (it accepts up to 14).
+
+The Gemini engine gets the same three channels (reference pictures as inline
+image parts; story so far + scene as the text prompt), so consistency works
+whichever engine is active. The child never supplies these context fields — they
+are derived entirely from the book.
 
 ## Operator review area (adults only)
 
-Optional audit console at `/review` that generates content and shows it **with
-every stage verdict and internal reason — even when the child app would block
-it**. Disabled (404) unless `REVIEW_PASSWORD` is set; separate password,
-cookie, and session TTL (`REVIEW_SESSION_TTL_HOURS`, default 4h); operator
-views of blocked content are logged. Never linked from the kids UI.
+Optional audit console at `/review` showing the gallery of **generated images
+the safety pipeline blocked** (output moderation or SafeSearch), newest first —
+each with the prompt/context that produced it, the model's captions, and the
+internal verdict reason the child-facing API never exposes. Entries are
+recorded automatically by the guarded pipeline into `data/blocked/` (capped at
+200; oldest pruned). The console is read-only: operators review what children
+already tried, they don't generate anything new. Disabled (404) unless
+`REVIEW_PASSWORD` is set; separate password, cookie, and session TTL
+(`REVIEW_SESSION_TTL_HOURS`, default 4h); operator views of blocked content are
+logged. Never linked from the kids UI.
 
 ## Concurrency
 

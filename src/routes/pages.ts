@@ -1,5 +1,7 @@
 import { Router, type Request, type Response } from 'express';
+import { config } from '../config.js';
 import { requirePageAuth } from '../middleware/requireAuth.js';
+import { availableEngines, ENGINE_NAMES, illustratorName } from '../providers/imageProvider.js';
 
 /**
  * Authenticated browser pages: the landing hub and one page per creative tool.
@@ -311,6 +313,54 @@ pagesRouter.get('/books', (_req: Request, res: Response) => {
   );
 });
 
+/**
+ * Radio tiles for choosing which engine paints the book's pictures. Only the
+ * engines that are configured are offered; when there is no real choice (zero
+ * or one engine available) the picker — label and all — is omitted and the
+ * default engine applies.
+ */
+function enginePickerHtml(): string {
+  const engines = availableEngines();
+  if (engines.length < 2) return '';
+  const def = engines.includes(config.storyImage.provider)
+    ? config.storyImage.provider
+    : engines[0]!;
+  const DETAILS: Record<string, { icon: string; blurb: string }> = {
+    replicate: { icon: '🍌✨', blurb: 'Extra-fancy pictures' },
+    gemini: { icon: '🍌', blurb: 'Quick pictures' },
+  };
+  const tiles = engines
+    .map((value) => `
+    <label class="engine">
+      <input type="radio" name="engine" value="${value}" ${value === def ? 'checked' : ''} />
+      <span class="engine-body">
+        <span class="engine-icon" aria-hidden="true">${DETAILS[value]!.icon}</span>
+        <span class="engine-title">${ENGINE_NAMES[value].replace('Google ', '')}</span>
+        <span class="engine-blurb">${DETAILS[value]!.blurb}</span>
+      </span>
+    </label>`)
+    .join('');
+  return `<label class="field-label">Who should paint the pictures?</label>
+  <div class="engine-pick" role="radiogroup" aria-label="Who should paint the pictures?">
+    ${tiles}
+  </div>`;
+}
+
+const ENGINE_PICKER_CSS = `<style>
+  .engine-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 520px) { .engine-pick { grid-template-columns: 1fr; } }
+  .engine { display: block; cursor: pointer; }
+  .engine input { position: absolute; opacity: 0; }
+  .engine-body { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px;
+    border: 2px solid #c4d3da; border-radius: 11px; background: #f8fbfc; }
+  .engine input:checked + .engine-body { border-color: #2c6e8f; background: #eaf4f8;
+    box-shadow: 0 0 0 3px rgba(44,110,143,.15); }
+  .engine input:focus-visible + .engine-body { outline: 2px solid #2c6e8f; outline-offset: 2px; }
+  .engine-icon { font-size: 22px; }
+  .engine-title { font-weight: 700; font-size: 15px; }
+  .engine-blurb { font-size: 13px; color: #5a7785; }
+</style>`;
+
 // --- Start a new book -------------------------------------------------------------
 pagesRouter.get('/books/new', (_req: Request, res: Response) => {
   res.type('html').send(
@@ -326,6 +376,7 @@ pagesRouter.get('/books/new', (_req: Request, res: Response) => {
           <input id="title" type="text" maxlength="80" required placeholder="The Turtle Who Loved Hats…" />
           <label class="field-label" for="coverprompt">What should the cover picture look like? <span style="font-weight:400;color:#5a7785">(the title words will be painted into it)</span></label>
           <input id="coverprompt" type="text" maxlength="1000" placeholder="A little turtle in a big red hat, waving from a sunny beach" />
+          ${enginePickerHtml()}
           <label class="field-label">Who wrote it?</label>
           <div id="authors"><input class="author" type="text" maxlength="40" placeholder="Author name" /></div>
           <button type="button" class="linkbtn" id="addauthor">+ Add another author</button>
@@ -333,7 +384,7 @@ pagesRouter.get('/books/new', (_req: Request, res: Response) => {
         </form>
         <div id="status" class="status" role="status" aria-live="polite"></div>
       </div>`,
-      head: BOOK_STYLES + SHELF_STYLES,
+      head: BOOK_STYLES + SHELF_STYLES + ENGINE_PICKER_CSS,
     }) + `<script>${CLIENT_HELPERS_JS}${newBookClientJs()}</script>`,
   );
 });
@@ -361,7 +412,8 @@ const BOOK_TILE_JS = `
   function bookTile(b, opts) {
     const tile = document.createElement('a');
     tile.className = 'book-tile';
-    tile.href = '/books/' + b.id;
+    // Remember where the reader was opened from, so its "←" can return there.
+    tile.href = '/books/' + b.id + (opts && opts.from ? '?from=' + opts.from : '');
     if (b.cover) {
       const img = document.createElement('img');
       img.className = 'book-cover';
@@ -436,13 +488,15 @@ function newBookClientJs(): string {
     const coverPrompt = coverEl.value.trim();
     const authors = Array.from(authorsBox.querySelectorAll('.author'))
       .map((i) => i.value.trim()).filter(Boolean);
+    const engineEl = form.querySelector('input[name="engine"]:checked');
+    const imageEngine = engineEl ? engineEl.value : undefined;
     create.disabled = true;
     setStatus('<span class="spinner"></span>Making your book and painting the cover…');
     try {
       const res = await fetch('/v1/books', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ title: title, coverPrompt: coverPrompt || undefined, authors: authors }),
+        body: JSON.stringify({ title: title, coverPrompt: coverPrompt || undefined, authors: authors, imageEngine: imageEngine }),
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
@@ -478,7 +532,7 @@ function myBooksClientJs(): string {
         return;
       }
       for (const b of data.books) {
-        const tile = bookTile(b, { showPublished: true });
+        const tile = bookTile(b, { showPublished: true, from: 'mine' });
         const del = document.createElement('button');
         del.className = 'book-del';
         del.type = 'button';
@@ -533,7 +587,7 @@ function libraryClientJs(): string {
         shelf.appendChild(p);
         return;
       }
-      for (const b of data.books) shelf.appendChild(bookTile(b));
+      for (const b of data.books) shelf.appendChild(bookTile(b, { from: 'library' }));
     } catch {}
   })();
   `;
@@ -542,11 +596,20 @@ function libraryClientJs(): string {
 // --- Book reader: open-book spread, words left / picture right ------------------
 pagesRouter.get('/books/:id', (req: Request, res: Response) => {
   const id = req.params.id ?? '';
+  // The top-left "←" returns to wherever the reader came from: the shelf and
+  // the library link here with ?from=mine / ?from=library. With no marker
+  // (e.g. straight after creating a book) it falls back to the Storybooks hub.
+  const back =
+    req.query.from === 'library'
+      ? { href: '/library', label: 'Library' }
+      : req.query.from === 'mine'
+        ? { href: '/books/mine', label: 'My storybooks' }
+        : { href: '/books', label: 'Storybooks' };
   // The page shell is static; the client fetches the book JSON by id.
   res.type('html').send(
     shell({
       title: 'My book — Harbor House',
-      back: { href: '/library', label: 'Library' },
+      back,
       library: true,
       body: `<div id="book-root" data-book-id="${encodeURIComponent(id)}">
         <div class="book-wrap">
@@ -561,10 +624,7 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
           <span class="navlabel" id="navlabel"></span>
           <button class="navbtn" id="next" type="button">Next ›</button>
         </nav>
-        <div class="bookactions" id="bookactions" hidden>
-          <button class="cta" id="savebtn" type="button">💾 Save to my books</button>
-          <button class="cta publish" id="publishbtn" type="button">📚 Publish to the library</button>
-        </div>
+        <div class="bookactions" id="bookactions" hidden></div>
         <div id="status" class="status" role="status" aria-live="polite" style="text-align:center"></div>
       </div>`,
       head:
@@ -586,6 +646,23 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .pagenum { margin-top: 14px; text-align: center; color: #b3a789; font-size: 12px; }
         .page-right img { max-width: 100%; max-height: 420px; object-fit: contain; margin: auto;
           border-radius: 8px; }
+        /* Picture + optional pen-drawing overlay, kept exactly aligned. */
+        .page-pic { position: relative; display: inline-block; line-height: 0; margin: auto; max-width: 100%; }
+        .page-pic .drawing-overlay { position: absolute; inset: 0; width: 100% !important;
+          height: 100% !important; max-height: none; margin: 0; pointer-events: none; }
+        .draw-canvas { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 8px;
+          touch-action: none; cursor: crosshair; }
+        /* Pen palette */
+        .draw-tool .palette { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+        .draw-tool .swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid #cbbfa4;
+          cursor: pointer; padding: 0; }
+        .draw-tool .swatch[data-color="#ffffff"] { border-color: #b3a789; }
+        .draw-tool .tool.active { outline: 3px solid #2c6e8f; outline-offset: 1px; }
+        .draw-tool .eraser, .draw-tool .tool:not(.swatch) { font-size: 13px; font-weight: 600;
+          padding: 5px 10px; border-radius: 8px; border: 1px solid #cbbfa4; background: #fdf9f0;
+          color: #5a4632; cursor: pointer; }
+        .draw-tool .draw-actions { display: flex; gap: 12px; align-items: center; margin-top: 10px; }
+        .draw-tool .draw-actions .cta { padding: 9px 14px; font-size: 14px; margin: 0; }
         .no-image { margin: auto; color: #b3a789; font-size: 14px; text-align: center; }
         .booknav { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; }
         .navbtn { padding: 10px 16px; font-size: 14px; font-weight: 700; color: #5a4632;
@@ -629,6 +706,9 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .cta.publish { background: #7a5aa0; }
         .cta.publish:hover { background: #684b8a; }
         .cta.publish:disabled { background: #b3a3c9; }
+        .cta.cancel { background: #8a8a8a; }
+        .cta.cancel:hover { background: #737373; }
+        .cta.cancel:disabled { background: #bdbdbd; }
         .pubnote { text-align: center; color: #5a4632; font-size: 13px; font-weight: 600; margin-top: 12px; }
         /* Repaint-the-picture controls under a page's image */
         .regen { margin-top: 10px; }
@@ -658,6 +738,9 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
 
 function readerClientJs(): string {
   return `
+  // Per-engine display names; books without a stored choice show the default.
+  const ILLUSTRATORS = ${JSON.stringify(ENGINE_NAMES)};
+  const DEFAULT_ILLUSTRATOR = ${JSON.stringify(illustratorName())};
   const bookId = document.getElementById('book-root').dataset.bookId;
   const bookEl = document.getElementById('book');
   const left = document.getElementById('page-left');
@@ -686,7 +769,14 @@ function readerClientJs(): string {
   function finished() {
     return book.pages.length > 0 && !!book.pages[book.pages.length - 1].isEnd;
   }
-  function editable() { return book.status !== 'published'; }
+  // A finished book opens as a pure READER (no edit controls); the owner can
+  // reopen it with the "Edit this book" button. An unfinished draft is still
+  // mid-creation, so it stays editable straight away. Published books never are.
+  let editMode = false;
+  // True when editing was entered via "Edit this book" (a server-side snapshot
+  // exists) — only then can "Cancel" restore the book to how it was.
+  let editSession = false;
+  function editable() { return book.status !== 'published' && editMode; }
   // Spread 0 = closed front cover; 1 = title page; 2..n+1 = story pages;
   // n+2 = "add a page" (drafts that aren't finished only).
   function lastSpread() {
@@ -753,6 +843,7 @@ function readerClientJs(): string {
         art.className = 'the-end-art';
         art.textContent = '✨🎉✨';
         right.appendChild(art);
+        if (editable()) left.appendChild(endPageControls());
         return;
       }
       navlabel.textContent = 'Page ' + (spread - 1) + ' of ' + n;
@@ -764,7 +855,23 @@ function readerClientJs(): string {
       num.className = 'pagenum';
       num.textContent = String(spread - 1);
       left.appendChild(num);
-      right.appendChild(p.image ? imgEl(p.image, p.imagePrompt) : noImage('No picture on this page'));
+      if (editable()) left.appendChild(wordsEditControls(spread - 2, p, t));
+      if (p.image) {
+        const picWrap = document.createElement('div');
+        picWrap.className = 'page-pic';
+        const ai = imgEl(p.image, p.imagePrompt);
+        ai.className = 'ai-pic';
+        picWrap.appendChild(ai);
+        if (p.drawing) {
+          const d = imgEl(p.drawing, 'your drawing');
+          d.className = 'drawing-overlay';
+          picWrap.appendChild(d);
+        }
+        right.appendChild(picWrap);
+        if (editable()) right.appendChild(drawControls(spread - 2, p, picWrap, ai));
+      } else {
+        right.appendChild(noImage('No picture on this page'));
+      }
       if (editable()) right.appendChild(regenControls(spread - 2, p));
     } else {
       renderAddPage();
@@ -848,7 +955,7 @@ function readerClientJs(): string {
     right.appendChild(ih);
     const iname = document.createElement('div');
     iname.className = 'titlepage-names';
-    iname.textContent = 'Google Nano Banana 2';
+    iname.textContent = ILLUSTRATORS[book.imageEngine] || DEFAULT_ILLUSTRATOR;
     right.appendChild(iname);
   }
 
@@ -912,6 +1019,245 @@ function readerClientJs(): string {
     return wrap;
   }
 
+  // "Change the words": edit a saved page's narration in place (left page).
+  // The picture is untouched; the new words are re-checked by the server.
+  function wordsEditControls(pageIndex, page, textEl) {
+    const wrap = document.createElement('div');
+    wrap.className = 'regen';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'linkbtn';
+    toggle.textContent = '✏️ Change the words';
+    wrap.appendChild(toggle);
+
+    toggle.addEventListener('click', () => {
+      toggle.remove();
+      closeDrawTool(); // no drawing while changing the words
+      textEl.style.display = 'none'; // the textarea takes the text's place
+      const form = document.createElement('form');
+      const label = document.createElement('label');
+      label.textContent = 'Rewrite the story for this page';
+      const ta = document.createElement('textarea');
+      ta.maxLength = 2000;
+      ta.required = true;
+      ta.value = page.text;
+      const btn = document.createElement('button');
+      btn.type = 'submit';
+      btn.className = 'cta';
+      btn.textContent = '✏️ Save the words';
+      form.appendChild(label); form.appendChild(ta); form.appendChild(btn);
+      wrap.appendChild(form);
+      ta.focus();
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const text = ta.value.trim();
+        if (!text) return;
+        btn.disabled = true;
+        setStatus('<span class="spinner"></span>Saving your words…');
+        try {
+          const res = await fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/text', {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ text: text }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok) {
+            book = data.book;
+            setStatus('Your new words are saved! ✏️');
+            render();
+            return;
+          }
+          const f = friendlyError(res, data);
+          setStatus(f.text, f.cls);
+          btn.disabled = false;
+        } catch {
+          setStatus('Could not reach the server. Check your connection and try again.', 'error');
+          btn.disabled = false;
+        }
+      });
+    });
+    return wrap;
+  }
+
+  // Remove any open drawing tool (called when a change-words/picture form opens).
+  function closeDrawTool() {
+    const dt = document.getElementById('draw-tool');
+    if (dt) dt.remove();
+    const cv = document.getElementById('draw-canvas');
+    if (cv) cv.remove();
+  }
+
+  // Pen palette: draw on the page's picture with a pen (colors) and an eraser.
+  // Only offered on a fully-made page (has words AND a picture), in edit mode.
+  const PEN_COLORS = ['#e23b3b','#f39a12','#f7d21a','#3aa657','#2c6e8f','#7a5aa0','#3d2f1e','#ffffff'];
+  function drawControls(pageIndex, page, picWrap, aiImg) {
+    const wrap = document.createElement('div');
+    wrap.className = 'regen draw-tool';
+    wrap.id = 'draw-tool';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'linkbtn';
+    toggle.textContent = page.drawing ? '🖍️ Draw / erase on the picture' : '🖍️ Draw on the picture';
+    wrap.appendChild(toggle);
+
+    toggle.addEventListener('click', () => {
+      toggle.remove();
+      startDrawing(pageIndex, page, picWrap, aiImg, wrap);
+    });
+    return wrap;
+  }
+
+  function startDrawing(pageIndex, page, picWrap, aiImg, wrap) {
+    // Remove the static saved-drawing overlay: its pixels get loaded INTO the
+    // canvas below, so the canvas (which the pen and eraser act on) becomes the
+    // one and only drawing layer. Otherwise the old overlay would still show
+    // through and look impossible to erase.
+    const staleOverlay = picWrap.querySelector('.drawing-overlay');
+    if (staleOverlay) staleOverlay.remove();
+
+    // Size the canvas to the picture as it is displayed right now.
+    const rect = aiImg.getBoundingClientRect();
+    const w = Math.round(rect.width) || 400;
+    const h = Math.round(rect.height) || 400;
+    const canvas = document.createElement('canvas');
+    canvas.id = 'draw-canvas';
+    canvas.className = 'draw-canvas';
+    canvas.width = w;
+    canvas.height = h;
+    picWrap.appendChild(canvas);
+    const ctx = canvas.getContext('2d');
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+
+    // Continue from any existing drawing so the child can add to it.
+    if (page.drawing) {
+      const prev = new Image();
+      prev.onload = () => ctx.drawImage(prev, 0, 0, w, h);
+      prev.src = 'data:' + page.drawing.mimeType + ';base64,' + page.drawing.dataBase64;
+    }
+
+    let color = PEN_COLORS[0];
+    let erasing = false;
+    let drawing = false;
+
+    function pos(e) {
+      const r = canvas.getBoundingClientRect();
+      return { x: (e.clientX - r.left) * (canvas.width / r.width),
+               y: (e.clientY - r.top) * (canvas.height / r.height) };
+    }
+    function stroke(p) {
+      ctx.globalCompositeOperation = erasing ? 'destination-out' : 'source-over';
+      ctx.strokeStyle = color;
+      ctx.lineWidth = erasing ? 22 : 5;
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+    }
+    canvas.addEventListener('pointerdown', (e) => {
+      drawing = true;
+      canvas.setPointerCapture(e.pointerId);
+      const p = pos(e);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      stroke(p); // a tap leaves a dot
+    });
+    canvas.addEventListener('pointermove', (e) => { if (drawing) stroke(pos(e)); });
+    const end = () => { drawing = false; ctx.beginPath(); };
+    canvas.addEventListener('pointerup', end);
+    canvas.addEventListener('pointercancel', end);
+    canvas.addEventListener('pointerleave', end);
+
+    // --- palette ---
+    const pal = document.createElement('div');
+    pal.className = 'palette';
+    const swatches = [];
+    function selectTool(next) {
+      erasing = next === 'eraser';
+      pal.querySelectorAll('.tool').forEach((b) => b.classList.remove('active'));
+      if (next === 'eraser') eraserBtn.classList.add('active');
+      swatches.forEach((s) => { if (!erasing && s.dataset.color === color) s.classList.add('active'); });
+    }
+    for (const c of PEN_COLORS) {
+      const s = document.createElement('button');
+      s.type = 'button';
+      s.className = 'swatch tool';
+      s.dataset.color = c;
+      s.style.background = c;
+      s.title = 'Pen';
+      s.addEventListener('click', () => { color = c; selectTool('pen'); });
+      pal.appendChild(s);
+      swatches.push(s);
+    }
+    const eraserBtn = document.createElement('button');
+    eraserBtn.type = 'button';
+    eraserBtn.className = 'tool eraser';
+    eraserBtn.textContent = '🧽 Eraser';
+    eraserBtn.addEventListener('click', () => selectTool('eraser'));
+    pal.appendChild(eraserBtn);
+
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'tool';
+    clearBtn.textContent = '🗑️ Clear';
+    clearBtn.addEventListener('click', () => {
+      if (!confirm('Erase your whole drawing on this page?')) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    });
+    pal.appendChild(clearBtn);
+    wrap.appendChild(pal);
+
+    // --- save / cancel ---
+    const actions = document.createElement('div');
+    actions.className = 'draw-actions';
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.className = 'cta';
+    save.textContent = '💾 Save my drawing';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'linkbtn';
+    cancel.textContent = 'Cancel';
+    actions.appendChild(save);
+    actions.appendChild(cancel);
+    wrap.appendChild(actions);
+
+    selectTool('pen'); // start on the first pen colour
+
+    cancel.addEventListener('click', () => { setStatus(''); render(); });
+
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      setStatus('<span class="spinner"></span>Saving your drawing…');
+      // Empty canvas → clear any saved drawing; otherwise send the PNG overlay.
+      const blank = document.createElement('canvas');
+      blank.width = canvas.width; blank.height = canvas.height;
+      const isEmpty = canvas.toDataURL() === blank.toDataURL();
+      const dataUrl = isEmpty ? null : canvas.toDataURL('image/png');
+      try {
+        const res = await fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/drawing', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ drawing: dataUrl }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
+          book = data.book;
+          setStatus(dataUrl ? 'Your drawing is saved! 🖍️' : 'Drawing cleared.');
+          render();
+          return;
+        }
+        const f = friendlyError(res, data);
+        setStatus(f.text, f.cls);
+        save.disabled = false;
+      } catch {
+        setStatus('Could not reach the server. Check your connection and try again.', 'error');
+        save.disabled = false;
+      }
+    });
+  }
+
   // "Change this picture": re-enter a prompt and repaint this page's artwork.
   function regenControls(pageIndex, page) {
     const wrap = document.createElement('div');
@@ -924,6 +1270,7 @@ function readerClientJs(): string {
 
     toggle.addEventListener('click', () => {
       toggle.remove();
+      closeDrawTool(); // no drawing while changing the picture
       const form = document.createElement('form');
       const label = document.createElement('label');
       label.textContent = 'Describe the new picture';
@@ -971,6 +1318,40 @@ function readerClientJs(): string {
     return wrap;
   }
 
+  // On the "The End" page in edit mode: remove it and jump back to writing.
+  function endPageControls() {
+    const wrap = document.createElement('div');
+    wrap.className = 'regen';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cta';
+    btn.textContent = '✍️ Keep writing the story';
+    wrap.appendChild(btn);
+    btn.addEventListener('click', async () => {
+      if (!confirm('Remove the "The End" page so you can add more pages?')) return;
+      btn.disabled = true;
+      setStatus('<span class="spinner"></span>Reopening your story…');
+      try {
+        const res = await fetch('/v1/books/' + bookId + '/end', { method: 'DELETE' });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
+          book = data.book;
+          spread = book.pages.length + 2; // jump to the "add a page" spread
+          setStatus('Keep going — add your next page! ✍️');
+          render();
+          return;
+        }
+        const f = friendlyError(res, data);
+        setStatus(f.text, f.cls);
+        btn.disabled = false;
+      } catch {
+        setStatus('Could not reach the server. Check your connection and try again.', 'error');
+        btn.disabled = false;
+      }
+    });
+    return wrap;
+  }
+
   function renderAddPage() {
     navlabel.textContent = 'New page';
     // Left page: the story words. Right page: a SEPARATE picture prompt.
@@ -997,6 +1378,21 @@ function readerClientJs(): string {
     imgEl2.value = draft.imagePrompt;
     storyEl.addEventListener('input', () => { draft.text = storyEl.value; saveDraft(); });
     imgEl2.addEventListener('input', () => { draft.imagePrompt = imgEl2.value; saveDraft(); });
+
+    // First time the child clicks over to the picture prompt and it's still
+    // empty, start it off with the narration they just wrote — a ready-made
+    // description they can then tweak. Only once, so deliberately clearing it
+    // doesn't fight back.
+    let prefilled = false;
+    imgEl2.addEventListener('focus', () => {
+      if (prefilled || imgEl2.value.trim()) return;
+      const words = storyEl.value.trim();
+      if (!words) return;
+      prefilled = true;
+      imgEl2.value = words.slice(0, 1000); // input maxlength
+      draft.imagePrompt = imgEl2.value;
+      saveDraft();
+    });
 
     rightForm.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -1056,43 +1452,151 @@ function readerClientJs(): string {
     });
   }
 
-  // Save keeps the draft on your shelf; publish moves it to the library for everyone.
-  function setupActions() {
+  // Bottom action bar. What it offers depends on the book's state:
+  //   published                  → just a note (read-only forever)
+  //   finished draft, read mode  → "Edit this book" (the owner can reopen it)
+  //   editing (or mid-creation)  → Save / Publish
+  function renderActions() {
     const actions = document.getElementById('bookactions');
-    if (!editable()) {
+    actions.innerHTML = '';
+    actions.hidden = true;
+    const oldNote = document.querySelector('.pubnote');
+    if (oldNote) oldNote.remove();
+
+    if (book.status === 'published') {
       const note = document.createElement('div');
       note.className = 'pubnote';
       note.textContent = '📚 This book is published in the library';
       actions.parentNode.insertBefore(note, actions);
       return;
     }
+
     actions.hidden = false;
-    document.getElementById('savebtn').addEventListener('click', () => {
+
+    // Publish moves the book to the library (offered in read AND edit mode —
+    // a finished draft can be published without opening it for editing).
+    function makePublishButton() {
+      const pub = document.createElement('button');
+      pub.className = 'cta publish';
+      pub.type = 'button';
+      pub.textContent = '📚 Publish to the library';
+      pub.addEventListener('click', async () => {
+        if (!confirm('Publish "' + book.title + '" to the library? Everyone can read it there, and it can no longer be changed.')) return;
+        pub.disabled = true;
+        setStatus('<span class="spinner"></span>Publishing to the library…');
+        try {
+          const res = await fetch('/v1/books/' + bookId + '/publish', { method: 'POST' });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok) { location.href = '/library'; return; }
+          const f = friendlyError(res, data);
+          setStatus(f.text, f.cls);
+          pub.disabled = false;
+        } catch {
+          setStatus('Could not reach the server. Check your connection and try again.', 'error');
+          pub.disabled = false;
+        }
+      });
+      return pub;
+    }
+
+    if (!editMode) {
+      // Reading a finished book from the shelf/library view. This single
+      // account owns every draft, so the owner check is implicit.
+      const edit = document.createElement('button');
+      edit.className = 'cta';
+      edit.type = 'button';
+      edit.textContent = '✏️ Edit this book';
+      edit.addEventListener('click', async () => {
+        edit.disabled = true;
+        // Snapshot the book first so "Cancel" can undo everything.
+        try {
+          const res = await fetch('/v1/books/' + bookId + '/edit-session', { method: 'POST' });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.ok) {
+            const f = friendlyError(res, data);
+            setStatus(f.text, f.cls);
+            edit.disabled = false;
+            return;
+          }
+        } catch {
+          setStatus('Could not reach the server. Check your connection and try again.', 'error');
+          edit.disabled = false;
+          return;
+        }
+        editMode = true;
+        editSession = true;
+        setStatus('You can change the words, pictures and authors now. ✏️');
+        renderActions();
+        render();
+      });
+      actions.appendChild(edit);
+      actions.appendChild(makePublishButton());
+      return;
+    }
+
+    // Save keeps the draft on your shelf; publish moves it to the library.
+    const save = document.createElement('button');
+    save.className = 'cta';
+    save.type = 'button';
+    save.textContent = '💾 Save to my books';
+    save.addEventListener('click', () => {
       setStatus('Saved! Your book is waiting in My storybooks. 💾');
       setTimeout(() => { location.href = '/books'; }, 700);
     });
-    document.getElementById('publishbtn').addEventListener('click', async () => {
-      if (!confirm('Publish "' + book.title + '" to the library? Everyone can read it there, and it can no longer be changed.')) return;
-      const btn = document.getElementById('publishbtn');
-      btn.disabled = true;
-      setStatus('<span class="spinner"></span>Publishing to the library…');
-      try {
-        const res = await fetch('/v1/books/' + bookId + '/publish', { method: 'POST' });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && data.ok) { location.href = '/library'; return; }
-        const f = friendlyError(res, data);
-        setStatus(f.text, f.cls);
-        btn.disabled = false;
-      } catch {
-        setStatus('Could not reach the server. Check your connection and try again.', 'error');
-        btn.disabled = false;
-      }
-    });
+    actions.appendChild(save);
+    actions.appendChild(makePublishButton());
+
+    // Cancel is only offered when a snapshot exists to go back to (i.e. the
+    // book was reopened via "Edit this book" — not during first creation).
+    if (editSession) {
+      const cancel = document.createElement('button');
+      cancel.className = 'cta cancel';
+      cancel.type = 'button';
+      cancel.textContent = '↩️ Cancel my changes';
+      cancel.addEventListener('click', async () => {
+        if (!confirm('Throw away all the changes you just made? Your book will go back to how it was.')) return;
+        cancel.disabled = true;
+        setStatus('<span class="spinner"></span>Undoing your changes…');
+        try {
+          const res = await fetch('/v1/books/' + bookId + '/edit-session/cancel', { method: 'POST' });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok) {
+            book = data.book;
+            editMode = false;
+            editSession = false;
+            if (spread > lastSpread()) spread = lastSpread();
+            setStatus('All changes undone — your book is back to how it was. ↩️');
+            renderActions();
+            render();
+            return;
+          }
+          const f = friendlyError(res, data);
+          setStatus(f.text, f.cls);
+          cancel.disabled = false;
+        } catch {
+          setStatus('Could not reach the server. Check your connection and try again.', 'error');
+          cancel.disabled = false;
+        }
+      });
+      actions.appendChild(cancel);
+    }
   }
 
   prev.addEventListener('click', () => { if (spread > 0) { spread--; setStatus(''); render(); } });
   next.addEventListener('click', () => {
     if (book && spread < lastSpread()) { spread++; setStatus(''); render(); }
+  });
+
+  // Arrow keys flip the pages too — but never while the child is typing in a
+  // text box (the arrows must keep moving the cursor there).
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (!book) return;
+    if (e.key === 'ArrowLeft' && spread > 0) { e.preventDefault(); spread--; setStatus(''); render(); }
+    if (e.key === 'ArrowRight' && spread < lastSpread()) { e.preventDefault(); spread++; setStatus(''); render(); }
   });
 
   (async () => {
@@ -1106,7 +1610,10 @@ function readerClientJs(): string {
         return;
       }
       book = data.book;
-      setupActions();
+      // A book that was already finished when opened starts as a pure reader;
+      // one still being written continues in creation (edit) mode.
+      editMode = !finished();
+      renderActions();
       render();
     } catch {
       setStatus('Could not load your book. Check your connection and try again.', 'error');

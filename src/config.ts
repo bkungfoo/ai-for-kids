@@ -27,10 +27,54 @@ const blockAtRaw = str('SAFESEARCH_BLOCK_AT', 'POSSIBLE').toUpperCase();
 const safeSearchBlockAt =
   blockAtRaw === 'LIKELY' || blockAtRaw === 'VERY_LIKELY' ? blockAtRaw : 'POSSIBLE';
 
+// Which engine paints storybook illustrations:
+//   'replicate' — "Nano Banana Pro" (Google Gemini 3 Pro Image) via Replicate;
+//                 higher quality + up to 14 reference images for consistency.
+//   'gemini'    — "Nano Banana 2" (Gemini 3.1 Flash Image) direct; cheaper.
+// Default is Replicate / Nano Banana Pro; set STORY_IMAGE_PROVIDER=gemini to
+// switch to the cheaper engine.
+const storyImageProviderRaw = str('STORY_IMAGE_PROVIDER', 'replicate').toLowerCase();
+const storyImageProvider: 'replicate' | 'gemini' =
+  storyImageProviderRaw === 'gemini' ? 'gemini' : 'replicate';
+
 // Operator review area. Opt-in: the whole /review surface is disabled (404)
 // unless REVIEW_PASSWORD is set. It is a separate, adult-only audit tool that
 // can view content the child-facing app blocked — never linked from the kids UI.
 const reviewPassword = str('REVIEW_PASSWORD');
+
+export interface Account {
+  username: string;
+  password: string;
+}
+
+// The valid login accounts. There is no registration path; these are the only
+// users. The primary account comes from AUTH_USERNAME/AUTH_PASSWORD (defaulting
+// to the provisioned HarborHouse credentials); AUTH_ADDITIONAL_USERS adds more
+// as a comma-separated "username:password" list, e.g.
+//   AUTH_ADDITIONAL_USERS=HarborHouse1:hhai123!,HarborHouse2:hhai123!
+// Duplicate usernames are ignored (first definition wins).
+function parseAccounts(): Account[] {
+  const primary: Account = {
+    username: str('AUTH_USERNAME', 'HarborHouse'),
+    password: str('AUTH_PASSWORD', 'hhai123!'),
+  };
+  const accounts: Account[] = [primary];
+  const seen = new Set([primary.username]);
+  for (const pair of str('AUTH_ADDITIONAL_USERS').split(',')) {
+    const trimmed = pair.trim();
+    if (!trimmed) continue;
+    const sep = trimmed.indexOf(':');
+    if (sep <= 0) continue; // need a non-empty username before the colon
+    const username = trimmed.slice(0, sep).trim();
+    const password = trimmed.slice(sep + 1); // password kept verbatim (may hold anything but comma)
+    if (!username || !password || seen.has(username)) continue;
+    seen.add(username);
+    accounts.push({ username, password });
+  }
+  return accounts;
+}
+
+const accounts = parseAccounts();
 
 export const config = {
   port: int('PORT', 8080),
@@ -39,6 +83,11 @@ export const config = {
   host: str('HOST', '0.0.0.0'),
 
   anthropicApiKey: str('ANTHROPIC_API_KEY'),
+
+  // Which engine paints storybook illustrations (see storyImageProvider above).
+  storyImage: {
+    provider: storyImageProvider,
+  },
 
   moderation: {
     model: str('MODERATION_MODEL', 'claude-opus-4-8'),
@@ -61,12 +110,17 @@ export const config = {
   http: {
     maxConcurrentRequests: int('MAX_CONCURRENT_REQUESTS', 10),
     maxQueue: int('MAX_QUEUE', 50),
+    // Set true when running behind a reverse proxy (e.g. Caddy terminating TLS)
+    // so Express reads the client IP/protocol from X-Forwarded-* headers.
+    trustProxy: bool('TRUST_PROXY', false),
   },
 
   auth: {
-    // The single valid account. No registration path exists.
-    username: str('AUTH_USERNAME', 'HarborHouse'),
-    password: str('AUTH_PASSWORD', 'hhai123!'),
+    // All valid accounts (primary + AUTH_ADDITIONAL_USERS). No registration path.
+    accounts,
+    // The primary account, kept for back-compat / display.
+    username: accounts[0]!.username,
+    password: accounts[0]!.password,
     sessionTtlMs: int('SESSION_TTL_HOURS', 12) * 60 * 60 * 1000,
     cookieName: 'csai_session',
     // Set true when served over HTTPS so the cookie is sent only on secure connections.
@@ -95,6 +149,23 @@ export const config = {
     gemini: {
       apiKey: str('GEMINI_API_KEY'),
       baseUrl: str('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com'),
+      // "Nano Banana 2" — Gemini 3.1 Flash Image.
+      model: str('GEMINI_IMAGE_MODEL', 'gemini-3.1-flash-image'),
+    },
+    // Replicate — hosts "Nano Banana Pro" (Google Gemini 3 Pro Image). Stateless
+    // API; we feed it earlier pages as context and earlier pictures as reference
+    // images so characters/objects/settings stay consistent across the book.
+    replicate: {
+      apiToken: str('REPLICATE_API_TOKEN'),
+      baseUrl: str('REPLICATE_BASE_URL', 'https://api.replicate.com'),
+      model: str('REPLICATE_IMAGE_MODEL', 'google/nano-banana-pro'),
+      // Output resolution: 1K | 2K | 4K. Lower is cheaper; book pages display
+      // small, so 2K is a good quality/cost balance.
+      resolution: str('REPLICATE_IMAGE_RESOLUTION', '2K'),
+      // Nano Banana Pro's own safety gate (in addition to our moderation +
+      // Vision SafeSearch): block_low_and_above | block_medium_and_above |
+      // block_only_high. Strict by default for a kids' app.
+      safetyFilter: str('REPLICATE_SAFETY_FILTER', 'block_low_and_above'),
     },
     claudeCode: {
       // Uses the top-level Anthropic API key.

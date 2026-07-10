@@ -2,8 +2,10 @@ import { logger } from '../logger.js';
 import {
   ProviderNotConfiguredError,
   ProviderRequestError,
+  type GenerationResult,
   type Provider,
 } from '../providers/types.js';
+import { recordBlocked } from './blockedStore.js';
 import { guardText } from './pipeline.js';
 import { safeSearchImages } from './safeSearch.js';
 import type { Verdict } from './types.js';
@@ -79,6 +81,7 @@ export async function runGuardedGeneration<Req>(
       categories: outputVerdict.categories,
       severity: outputVerdict.severity,
     });
+    await auditBlocked(provider, req, generation, 'output', outputVerdict);
     return blocked('output', outputVerdict);
   }
 
@@ -94,6 +97,7 @@ export async function runGuardedGeneration<Req>(
         severity: imageVerdict.severity,
         reason: imageVerdict.reason,
       });
+      await auditBlocked(provider, req, generation, 'image', imageVerdict);
       return blocked('output', imageVerdict);
     }
   }
@@ -101,102 +105,37 @@ export async function runGuardedGeneration<Req>(
   return { status: 200, body: { ok: true, result: generation.result } };
 }
 
-// --- Operator review generation ---------------------------------------------
-// A variant of the pipeline for the adult-only review area. It runs the SAME
-// safety checks but, instead of withholding blocked content, it returns the
-// generated output together with every stage verdict (including the internal
-// `reason`, which the child-facing API never exposes) so an operator can audit
-// exactly what was flagged and why.
-
-export interface ReviewStage {
-  stage: 'input' | 'output' | 'image';
-  allowed: boolean;
-  severity: Verdict['severity'];
-  categories: Verdict['categories'];
-  /** Internal explanation — intentionally surfaced here (operator-only). */
-  reason: string;
-}
-
-export type ReviewOutcome =
-  | {
-      status: 200;
-      body: {
-        ok: true;
-        /** True if the child-facing app would have blocked this. */
-        blocked: boolean;
-        stages: ReviewStage[];
-        /** Present when the provider ran; may contain content that was blocked. */
-        result?: unknown;
-      };
-    }
-  | { status: 501; body: { ok: false; error: string } }
-  | { status: 502; body: { ok: false; error: string } };
-
-function toStage(stage: ReviewStage['stage'], v: Verdict): ReviewStage {
-  return {
-    stage,
-    allowed: v.allowed,
-    severity: v.severity,
-    categories: v.categories,
-    reason: v.reason,
-  };
-}
-
-export async function runReviewGeneration<Req>(
+/**
+ * Preserve a blocked generation (when it produced images) in the operator-only
+ * audit store, so an adult can later review WHAT was stopped and why in
+ * /review. Recording failures never break the block itself.
+ */
+async function auditBlocked<Req>(
   provider: Provider<Req>,
   req: Req,
-): Promise<ReviewOutcome> {
-  if (!provider.isConfigured()) {
-    return { status: 501, body: { ok: false, error: `${provider.name} is not configured` } };
-  }
-
-  const stages: ReviewStage[] = [];
-
-  // 1. Input moderation. If the prompt is blocked, the provider is never called
-  //    (nothing is generated), so there is no output to review — return early.
-  const inputVerdict = await guardText(provider.inputTexts(req), 'input');
-  stages.push(toStage('input', inputVerdict));
-  if (!inputVerdict.allowed) {
-    return { status: 200, body: { ok: true, blocked: true, stages } };
-  }
-
-  // 2. Provider call.
-  let generation;
+  generation: GenerationResult,
+  stage: 'output' | 'image',
+  verdict: Verdict,
+): Promise<void> {
+  const images = generation.imagesToModerate ?? [];
+  if (images.length === 0) return; // nothing visual to review
   try {
-    generation = await provider.generate(req);
+    await recordBlocked({
+      provider: provider.name,
+      stage,
+      severity: verdict.severity,
+      categories: verdict.categories,
+      reason: verdict.reason,
+      inputTexts: provider.inputTexts(req),
+      captions: generation.textToModerate,
+      images,
+    });
   } catch (err) {
-    if (err instanceof ProviderNotConfiguredError) {
-      return { status: 501, body: { ok: false, error: err.message } };
-    }
-    logger.error('review provider error', {
+    logger.error('failed to record blocked generation', {
       provider: provider.name,
       error: err instanceof Error ? err.message : String(err),
     });
-    return { status: 502, body: { ok: false, error: `${provider.name} request failed` } };
   }
-
-  // 3. Output + 4. image checks — recorded but NOT enforced (content returned).
-  const outputVerdict = await guardText(
-    [...generation.textToModerate, ...generation.metadataToModerate],
-    'output',
-  );
-  stages.push(toStage('output', outputVerdict));
-
-  const images = generation.imagesToModerate ?? [];
-  if (images.length > 0) {
-    stages.push(toStage('image', await safeSearchImages(images)));
-  }
-
-  const blocked = stages.some((s) => !s.allowed);
-  if (blocked) {
-    // Audit trail: an operator viewed content the child app would have blocked.
-    logger.warn('operator reviewed blocked content', {
-      provider: provider.name,
-      stages: stages.filter((s) => !s.allowed).map((s) => ({ stage: s.stage, categories: s.categories })),
-    });
-  }
-
-  return { status: 200, body: { ok: true, blocked, stages, result: generation.result } };
 }
 
 function blocked(stage: 'input' | 'output', verdict: Verdict): GuardOutcome {

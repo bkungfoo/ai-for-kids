@@ -4,6 +4,8 @@ import { requireApiAuth } from '../middleware/requireAuth.js';
 import { claudeCodeProvider } from '../providers/claudeCode.js';
 import { elevenLabsProvider } from '../providers/elevenlabs.js';
 import { geminiProvider } from '../providers/gemini.js';
+import { replicateProvider } from '../providers/replicate.js';
+import { storyImageProvider } from '../providers/imageProvider.js';
 import { sunoProvider } from '../providers/suno.js';
 import { runGuardedGeneration } from '../safety/guardedGeneration.js';
 import { config } from '../config.js';
@@ -22,10 +24,12 @@ router.get('/health', (_req: Request, res: Response) => {
   res.json({
     ok: true,
     moderation: { model: config.moderation.model, failClosed: config.moderation.failClosed },
+    storyImage: config.storyImage.provider,
     providers: {
       suno: sunoProvider.isConfigured(),
       elevenlabs: elevenLabsProvider.isConfigured(),
       gemini: geminiProvider.isConfigured(),
+      replicate: replicateProvider.isConfigured(),
       claudeCode: claudeCodeProvider.isConfigured(),
     },
   });
@@ -67,7 +71,7 @@ router.post(
   }),
 );
 
-// --- Images: Gemini / Banana Pro --------------------------------------------
+// --- Images: Nano Banana Pro (Replicate) / Nano Banana 2 (Gemini) ------------
 router.post(
   '/v1/images',
   asyncHandler(async (req, res) => {
@@ -75,7 +79,7 @@ router.post(
       prompt: requireString(req.body, 'prompt'),
       model: optionalString(req.body, 'model', { maxLength: 100 }),
     };
-    const outcome = await runGuardedGeneration(geminiProvider, reqBody);
+    const outcome = await runGuardedGeneration(storyImageProvider(), reqBody);
     res.status(outcome.status).json(outcome.body);
   }),
 );

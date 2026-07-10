@@ -2,9 +2,9 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { config } from '../config.js';
 
 /**
- * Single hard-coded account. Username/password come from config (env-overridable)
- * and default to the provisioned HarborHouse credentials. There is intentionally
- * no registration path — this is the only valid user.
+ * A fixed set of accounts from config (env-overridable), defaulting to the
+ * provisioned HarborHouse credentials plus any AUTH_ADDITIONAL_USERS. There is
+ * intentionally no registration path — these are the only valid users.
  */
 
 /** Constant-time string compare via fixed-length SHA-256 digests. */
@@ -14,13 +14,20 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(da, db);
 }
 
-export function verifyCredentials(username: unknown, password: unknown): boolean {
-  if (typeof username !== 'string' || typeof password !== 'string') return false;
-  // Evaluate both comparisons (no short-circuit) to avoid leaking which field
-  // was wrong via timing.
-  const userOk = safeEqual(username, config.auth.username);
-  const passOk = safeEqual(password, config.auth.password);
-  return userOk && passOk;
+/**
+ * Return the matched account's username, or null if the credentials are wrong.
+ * Every account is checked with no short-circuit, so timing doesn't reveal
+ * which username exists or which field was wrong.
+ */
+export function authenticate(username: unknown, password: unknown): string | null {
+  if (typeof username !== 'string' || typeof password !== 'string') return null;
+  let matched: string | null = null;
+  for (const acct of config.auth.accounts) {
+    const userOk = safeEqual(username, acct.username);
+    const passOk = safeEqual(password, acct.password);
+    if (userOk && passOk) matched = acct.username;
+  }
+  return matched;
 }
 
 /**

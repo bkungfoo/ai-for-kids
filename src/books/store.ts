@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { ImageEngine } from '../providers/types.js';
 
 /**
  * File-backed storybook store. Each book is one JSON file under data/books/
@@ -20,6 +21,12 @@ export interface BookPage {
   imagePrompt: string;
   /** The illustration shown on the right-hand page. */
   image: BookImage | null;
+  /**
+   * The child's own pen doodle, a transparent PNG laid OVER the illustration
+   * (the AI picture underneath is kept intact). Only allowed once the page has
+   * both words and a picture. Null/absent means nothing drawn.
+   */
+  drawing?: BookImage | null;
   /** True for the closing "The End" page. */
   isEnd?: boolean;
 }
@@ -30,12 +37,20 @@ export type BookStatus = 'draft' | 'published';
 export interface Book {
   id: string;
   title: string;
+  /** The account that created the book — its private "My storybooks" shelf. */
+  owner?: string;
   /** Author names shown on the cover (children's first names, moderated on input). */
   authors: string[];
   status: BookStatus;
   cover: BookImage | null;
   /** The prompt used for the current cover (kept for regeneration prefill). */
   coverPrompt?: string;
+  /**
+   * The engine chosen for this book's pictures (picked when the book is
+   * started, so the whole book is illustrated in one consistent style).
+   * Absent on older books — those use the configured default.
+   */
+  imageEngine?: ImageEngine;
   pages: BookPage[];
   createdAt: string;
   updatedAt: string;
@@ -65,15 +80,19 @@ export async function createBook(
   authors: string[],
   cover: BookImage | null,
   coverPrompt?: string,
+  imageEngine?: ImageEngine,
+  owner?: string,
 ): Promise<Book> {
   const now = new Date().toISOString();
   const book: Book = {
     id: randomUUID(),
     title,
+    owner,
     authors,
     status: 'draft',
     cover,
     coverPrompt,
+    imageEngine,
     pages: [],
     createdAt: now,
     updatedAt: now,
@@ -170,6 +189,74 @@ export async function updatePage(
   const page = book.pages[index];
   if (!page) return undefined;
   book.pages[index] = { ...page, ...patch };
+  book.updatedAt = new Date().toISOString();
+  await save(book);
+  return book;
+}
+
+// --- Edit-session snapshots ---------------------------------------------------
+// When a finished book is reopened for editing, we snapshot its file first so
+// "cancel" can restore everything (words, pictures, authors) in one move.
+// Snapshots live in a subdirectory, so listBooks (which scans *.json in the
+// main dir) never sees them.
+
+const SNAP_DIR = path.join(DATA_DIR, 'snapshots');
+
+function snapFileFor(id: string): string | null {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) return null;
+  return path.join(SNAP_DIR, `${id}.json`);
+}
+
+/** Copy the book's current state aside. Overwrites any previous snapshot. */
+export async function snapshotBook(id: string): Promise<boolean> {
+  const file = fileFor(id);
+  const snap = snapFileFor(id);
+  if (!file || !snap) return false;
+  try {
+    const data = await readFile(file, 'utf8');
+    await mkdir(SNAP_DIR, { recursive: true });
+    const tmp = `${snap}.tmp`;
+    await writeFile(tmp, data, 'utf8');
+    await rename(tmp, snap);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Restore the book from its snapshot (and consume the snapshot). */
+export async function revertBook(id: string): Promise<Book | undefined> {
+  const file = fileFor(id);
+  const snap = snapFileFor(id);
+  if (!file || !snap) return undefined;
+  try {
+    const data = await readFile(snap, 'utf8');
+    const book = JSON.parse(data) as Book;
+    const tmp = `${file}.tmp`;
+    await writeFile(tmp, data, 'utf8');
+    await rename(tmp, file);
+    await unlink(snap).catch(() => {});
+    book.authors ??= [];
+    book.status ??= 'draft';
+    return book;
+  } catch {
+    return undefined; // no snapshot (or unreadable) — nothing to revert
+  }
+}
+
+/** Drop a snapshot without restoring (edits kept, e.g. after publish/delete). */
+export async function discardSnapshot(id: string): Promise<void> {
+  const snap = snapFileFor(id);
+  if (!snap) return;
+  await unlink(snap).catch(() => {});
+}
+
+/** Remove the trailing "The End" page so the story can be continued. */
+export async function removeEndPage(id: string): Promise<Book | undefined> {
+  const book = await getBook(id);
+  if (!book) return undefined;
+  if (!book.pages.at(-1)?.isEnd) return book; // nothing to remove
+  book.pages.pop();
   book.updatedAt = new Date().toISOString();
   await save(book);
   return book;

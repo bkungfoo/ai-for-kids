@@ -1,26 +1,25 @@
 import { config } from '../config.js';
 import {
+  CHILD_SAFE_IMAGE_PREAMBLE,
   ProviderNotConfiguredError,
   ProviderRequestError,
   type GenerationResult,
+  type ImageGenRequest,
   type Provider,
 } from './types.js';
 
-export interface GeminiImageRequest {
-  /** Description of the picture to make. Moderated on input. */
-  prompt: string;
-  /** Image model, e.g. a "Banana Pro" / Imagen-style model id. */
-  model?: string;
-}
-
 /**
- * Google Gemini / "Banana Pro" (text-to-image) adapter.
+ * Google "Nano Banana 2" (Gemini 3.1 Flash Image) adapter.
+ *
+ * Gemini is multimodal, so we stay consistent across a book by prepending the
+ * earlier illustrations as inline reference images and folding the story so far
+ * into the text prompt.
  *
  * Input moderation guards the prompt. On output we moderate any text the model
  * returns alongside the image (a revised prompt or caption), since the image
  * itself is binary.
  */
-export const geminiProvider: Provider<GeminiImageRequest> = {
+export const geminiProvider: Provider<ImageGenRequest> = {
   name: 'gemini',
 
   isConfigured() {
@@ -28,22 +27,34 @@ export const geminiProvider: Provider<GeminiImageRequest> = {
   },
 
   inputTexts(req) {
-    return [req.prompt];
+    return req.context ? [req.prompt, req.context] : [req.prompt];
   },
 
   async generate(req): Promise<GenerationResult> {
     const { apiKey, baseUrl } = config.providers.gemini;
     if (!apiKey) throw new ProviderNotConfiguredError('gemini');
 
-    // "Nano Banana 2" — Gemini 3.1 Flash Image.
-    const model = req.model ?? 'gemini-3.1-flash-image';
+    const model = req.model ?? config.providers.gemini.model;
+
+    // Earlier pictures go first as reference images, then the text: the
+    // child-safety rule FIRST, then the story so far (context), then the scene
+    // to draw now.
+    const inputParts: GeminiPart[] = [];
+    for (const img of req.referenceImages ?? []) {
+      inputParts.push({ inlineData: { mimeType: img.mimeType, data: img.dataBase64 } });
+    }
+    const text = [CHILD_SAFE_IMAGE_PREAMBLE, req.context, req.prompt]
+      .filter((t): t is string => Boolean(t?.trim()))
+      .join('\n\n');
+    inputParts.push({ text });
+
     const res = await fetch(
       `${baseUrl}/v1beta/models/${model}:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: req.prompt }] }],
+          contents: [{ role: 'user', parts: inputParts }],
           generationConfig: {
             responseModalities: ['IMAGE', 'TEXT'],
             // Always generate square images: storybook covers and pages are

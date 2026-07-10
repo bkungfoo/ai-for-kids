@@ -26,7 +26,8 @@
       "Bash(curl -s -b /tmp/claude-1000/-home-brianfoo-code-child-safe-ai/918e19d0-f8ee-4d53-b784-bfb8687e901e/scratchpad/cookies.txt -o /dev/null -w '%{http_code}\\\\n' http://34.53.116.202:5000/images)",
       "Bash(curl -s -o /dev/null -w '%{http_code}\\\\n' -X POST http://34.53.116.202:5000/v1/images -H 'content-type: application/json' -d '{\"prompt\":\"a cat\"}')",
       "Bash(time curl -s -b /tmp/claude-1000/-home-brianfoo-code-child-safe-ai/918e19d0-f8ee-4d53-b784-bfb8687e901e/scratchpad/cookies.txt -X POST http://34.53.116.202:5000/v1/images -H 'content-type: application/json' -d '{\"prompt\":\"A friendly dragon reading a book under a rainbow\"}' -o /tmp/claude-1000/-home-brianfoo-code-child-safe-ai/918e19d0-f8ee-4d53-b784-bfb8687e901e/scratchpad/imgresp.json -w 'HTTP %{http_code}\\\\n')",
-      "Bash(python3 -)"
+      "Bash(python3 -)",
+      "Bash(python3 -c \"import json,sys; b=json.load\\(sys.stdin\\); print\\('keys:', list\\(b.keys\\(\\)\\)\\); print\\('cover mime:', \\(b.get\\('cover'\\) or {}\\).get\\('mimeType'\\)\\); print\\('pages:', [\\(p.get\\('text',''\\)[:30], \\(p.get\\('image'\\) or {}\\).get\\('mimeType'\\), len\\(\\(p.get\\('image'\\) or {}\\).get\\('dataBase64',''\\)\\)\\) for p in b.get\\('pages',[]\\)]\\)\")"
     ]
   }
 }
