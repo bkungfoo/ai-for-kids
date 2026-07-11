@@ -180,10 +180,62 @@ export async function listBooks(): Promise<Book[]> {
   return books.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-export async function addPage(id: string, page: BookPage): Promise<Book | undefined> {
+/**
+ * Add a page. With `insertAt` the page slots in at that index (later pages
+ * shift right); otherwise it is appended — but always BEFORE any "The End"
+ * page, which stays last.
+ */
+export async function addPage(
+  id: string,
+  page: BookPage,
+  insertAt?: number,
+): Promise<{ book: Book; pageIndex: number } | undefined> {
   const book = await getBook(id);
   if (!book) return undefined;
-  book.pages.push(page);
+  const lastStory = book.pages.at(-1)?.isEnd ? book.pages.length - 1 : book.pages.length;
+  const index = insertAt === undefined ? lastStory : Math.max(0, Math.min(insertAt, lastStory));
+  book.pages.splice(index, 0, page);
+  book.updatedAt = new Date().toISOString();
+  await save(book);
+  return { book, pageIndex: index };
+}
+
+/** Move a story page to a new index. Both positions must be story pages. */
+export async function movePage(
+  id: string,
+  from: number,
+  to: number,
+): Promise<Book | undefined> {
+  const book = await getBook(id);
+  if (!book) return undefined;
+  const lastStory = (book.pages.at(-1)?.isEnd ? book.pages.length - 1 : book.pages.length) - 1;
+  if (from < 0 || from > lastStory || to < 0 || to > lastStory || from === to) return undefined;
+  const [page] = book.pages.splice(from, 1);
+  book.pages.splice(to, 0, page!);
+  book.updatedAt = new Date().toISOString();
+  await save(book);
+  return book;
+}
+
+/** Insert a copy of a story page right after it (picture, drawing and all). */
+export async function duplicatePage(id: string, index: number): Promise<Book | undefined> {
+  const book = await getBook(id);
+  if (!book) return undefined;
+  const page = book.pages[index];
+  if (!page || page.isEnd) return undefined;
+  book.pages.splice(index + 1, 0, structuredClone(page));
+  book.updatedAt = new Date().toISOString();
+  await save(book);
+  return book;
+}
+
+/** Remove a single story page ("The End" has its own endpoint). */
+export async function deletePage(id: string, index: number): Promise<Book | undefined> {
+  const book = await getBook(id);
+  if (!book) return undefined;
+  const page = book.pages[index];
+  if (!page || page.isEnd) return undefined;
+  book.pages.splice(index, 1);
   book.updatedAt = new Date().toISOString();
   await save(book);
   return book;

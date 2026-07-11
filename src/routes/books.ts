@@ -9,9 +9,12 @@ import {
   addPage,
   createBook,
   deleteBook,
+  deletePage,
   discardSnapshot,
+  duplicatePage,
   getBook,
   listBooks,
+  movePage,
   publishBook,
   removeEndPage,
   revertBook,
@@ -312,6 +315,13 @@ booksApiRouter.post(
     const bookId = req.params.id ?? '';
     const text = requireString(req.body, 'text', { maxLength: 2000 });
     const imagePrompt = requireString(req.body, 'imagePrompt', { maxLength: 1000 });
+    // Optional: slot the new page in at this index instead of appending.
+    const insertAtRaw = (req.body as { insertAt?: unknown } | undefined)?.insertAt;
+    const insertAt =
+      insertAtRaw === undefined || insertAtRaw === null ? undefined : Number(insertAtRaw);
+    if (insertAt !== undefined && (!Number.isInteger(insertAt) || insertAt < 0)) {
+      throw new ValidationError('"insertAt" must be a non-negative integer');
+    }
 
     const existing = await getOwnedBook(bookId, currentUser(req));
     if (!existing) {
@@ -335,8 +345,10 @@ booksApiRouter.post(
 
     // The illustration runs through the full guarded pipeline. We hand the
     // engine the story so far (context) and the earlier pictures (references) so
-    // characters, objects and settings stay consistent from page to page.
-    const priorPages = existing.pages;
+    // characters, objects and settings stay consistent from page to page. For a
+    // mid-book insert, "the story so far" is the pages BEFORE the insert point.
+    const priorPages =
+      insertAt === undefined ? existing.pages : existing.pages.slice(0, insertAt);
     const refs = referenceImages(existing, priorPages);
     const outcome = await runGuardedGeneration(imageProviderFor(existing.imageEngine), {
       prompt: pageScenePrompt(existing, text, imagePrompt, refs.length > 0),
@@ -348,16 +360,16 @@ booksApiRouter.post(
       return;
     }
 
-    const book = await addPage(bookId, {
-      text,
-      imagePrompt,
-      image: firstImage(outcome.body.result),
-    });
-    if (!book) {
+    const added = await addPage(
+      bookId,
+      { text, imagePrompt, image: firstImage(outcome.body.result) },
+      insertAt,
+    );
+    if (!added) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
-    res.status(201).json({ ok: true, book, pageIndex: book.pages.length - 1 });
+    res.status(201).json({ ok: true, book: added.book, pageIndex: added.pageIndex });
   }),
 );
 
@@ -526,6 +538,80 @@ booksApiRouter.post(
   }),
 );
 
+// --- Page management: move / duplicate / remove a story page --------------------
+booksApiRouter.post(
+  '/:id/pages/:index/move',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const from = Number.parseInt(req.params.index ?? '', 10);
+    const toRaw = (req.body as { to?: unknown } | undefined)?.to;
+    const to = Number(toRaw);
+    if (!Number.isInteger(to) || to < 0) {
+      throw new ValidationError('"to" must be a non-negative page index');
+    }
+
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+
+    // movePage enforces that both spots are story pages ("The End" stays last).
+    const updated = await movePage(bookId, from, to);
+    if (!updated) {
+      res.status(409).json({ ok: false, error: 'That page cannot move there' });
+      return;
+    }
+    res.json({ ok: true, book: updated, pageIndex: to });
+  }),
+);
+
+booksApiRouter.post(
+  '/:id/pages/:index/duplicate',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const index = Number.parseInt(req.params.index ?? '', 10);
+
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+
+    // Copies the already-moderated words, picture, doodle and narration as-is.
+    const updated = await duplicatePage(bookId, index);
+    if (!updated) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    res.status(201).json({ ok: true, book: updated, pageIndex: index + 1 });
+  }),
+);
+
+booksApiRouter.delete(
+  '/:id/pages/:index',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const index = Number.parseInt(req.params.index ?? '', 10);
+
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+
+    const updated = await deletePage(bookId, index);
+    if (!updated) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    res.json({ ok: true, book: updated });
+  }),
+);
+
 // --- Close the book with a "The End" page --------------------------------------
 booksApiRouter.post(
   '/:id/end',
@@ -542,12 +628,12 @@ booksApiRouter.post(
       return;
     }
     // Fixed, safe text — no moderation or illustration needed.
-    const book = await addPage(bookId, { text: 'The End', imagePrompt: '', image: null, isEnd: true });
-    if (!book) {
+    const added = await addPage(bookId, { text: 'The End', imagePrompt: '', image: null, isEnd: true });
+    if (!added) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
-    res.status(201).json({ ok: true, book, pageIndex: book.pages.length - 1 });
+    res.status(201).json({ ok: true, book: added.book, pageIndex: added.pageIndex });
   }),
 );
 

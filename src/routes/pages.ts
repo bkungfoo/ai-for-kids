@@ -724,6 +724,12 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .w.said { background: #ffe9a8; border-radius: 4px; }
         /* On the closed cover the read button sits on a paper strip below the art */
         .book.closed .page-right .readrow { padding: 12px 16px 4px; position: relative; z-index: 2; }
+        /* Page tools (edit mode) */
+        .pagetools { display: flex; flex-wrap: wrap; gap: 4px 10px; justify-content: center;
+          margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e0d6bd; }
+        .pagetools .linkbtn { font-size: 12px; }
+        .pagetools .linkbtn:disabled { opacity: .35; cursor: default; text-decoration: none; }
+        .pagetools .danger { color: #8a1c1c; }
         /* The End page */
         .the-end-art { margin: auto; font-size: 56px; text-align: center; letter-spacing: 8px; }
         .cta.end { background: #8a5a00; margin-top: 10px; }
@@ -786,10 +792,17 @@ function readerClientJs(): string {
   // exists) — only then can "Cancel" restore the book to how it was.
   let editSession = false;
   function editable() { return book.status !== 'published' && editMode; }
+  // When set, the "new page" form INSERTS at this page index instead of
+  // appending (reached via "Insert new page before/after" in the page tools).
+  // insertReturn remembers the spread to go back to if the insert is cancelled.
+  let insertAt = null;
+  let insertReturn = 2;
+
   // Spread 0 = closed front cover; 1 = title page; 2..n+1 = story pages;
-  // n+2 = "add a page" (drafts that aren't finished only).
+  // n+2 = "add a page" (drafts that aren't finished — or any draft while a
+  // mid-book insert is underway, since inserting works even in finished books).
   function lastSpread() {
-    return book.pages.length + 1 + (editable() && !finished() ? 1 : 0);
+    return book.pages.length + 1 + (editable() && (!finished() || insertAt !== null) ? 1 : 0);
   }
 
   function setStatus(text, cls) {
@@ -1063,6 +1076,7 @@ function readerClientJs(): string {
       left.appendChild(num);
       left.appendChild(readRow(spread - 2, p, t));
       if (editable()) left.appendChild(wordsEditControls(spread - 2, p, t));
+      if (editable()) left.appendChild(pageToolsControls(spread - 2));
       if (p.image) {
         const picWrap = document.createElement('div');
         picWrap.className = 'page-pic';
@@ -1525,6 +1539,75 @@ function readerClientJs(): string {
     return wrap;
   }
 
+  // Page tools (edit mode): move / insert after / copy / remove this page.
+  function pageToolsControls(pageIndex) {
+    const wrap = document.createElement('div');
+    wrap.className = 'pagetools';
+    const storyCount = book.pages.length - (finished() ? 1 : 0);
+
+    function tool(label, handler, opts) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'linkbtn' + (opts && opts.danger ? ' danger' : '');
+      b.textContent = label;
+      if (opts && opts.disabled) b.disabled = true;
+      else b.addEventListener('click', handler);
+      wrap.appendChild(b);
+      return b;
+    }
+
+    async function call(method, path, body, okStatus, onOk) {
+      setStatus('<span class="spinner"></span>Rearranging your book…');
+      try {
+        const res = await fetch('/v1/books/' + bookId + path, {
+          method: method,
+          headers: body ? { 'content-type': 'application/json' } : undefined,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
+          book = data.book;
+          setStatus(okStatus);
+          onOk(data);
+          render();
+          return;
+        }
+        const f = friendlyError(res, data);
+        setStatus(f.text, f.cls);
+      } catch {
+        setStatus('Could not reach the server. Check your connection and try again.', 'error');
+      }
+    }
+
+    tool('◀ Move earlier', () => {
+      call('POST', '/pages/' + pageIndex + '/move', { to: pageIndex - 1 },
+        'Moved! This is page ' + pageIndex + ' now.', () => { spread = pageIndex + 1; });
+    }, { disabled: pageIndex === 0 });
+
+    tool('Move later ▶', () => {
+      call('POST', '/pages/' + pageIndex + '/move', { to: pageIndex + 1 },
+        'Moved! This is page ' + (pageIndex + 2) + ' now.', () => { spread = pageIndex + 3; });
+    }, { disabled: pageIndex >= storyCount - 1 });
+
+    function startInsert(at) {
+      insertAt = at;
+      insertReturn = spread;
+      spread = lastSpread();
+      setStatus('');
+      render();
+    }
+    tool('➕ Insert new page before', () => startInsert(pageIndex));
+    tool('➕ Insert new page after', () => startInsert(pageIndex + 1));
+
+    tool('🗑️ Delete this page', () => {
+      if (!confirm('Delete page ' + (pageIndex + 1) + ' (its words and picture)? This cannot be undone.')) return;
+      call('DELETE', '/pages/' + pageIndex, null,
+        'Page deleted. 🗑️', () => { if (spread > lastSpread()) spread = lastSpread(); });
+    }, { danger: true });
+
+    return wrap;
+  }
+
   // On the "The End" page in edit mode: remove it and jump back to writing.
   function endPageControls() {
     const wrap = document.createElement('div');
@@ -1560,7 +1643,10 @@ function readerClientJs(): string {
   }
 
   function renderAddPage() {
-    navlabel.textContent = 'New page';
+    const inserting = insertAt !== null;
+    navlabel.textContent = inserting
+      ? 'New page — will be page ' + (insertAt + 1)
+      : 'New page';
     // Left page: the story words. Right page: a SEPARATE picture prompt.
     const form = document.createElement('form');
     form.id = 'add-form';
@@ -1568,6 +1654,20 @@ function readerClientJs(): string {
       '<label for="story">Write your story for this page</label>' +
       '<textarea id="story" maxlength="2000" required placeholder="Once upon a time…"></textarea>';
     left.appendChild(form);
+    if (inserting) {
+      const cancelIns = document.createElement('button');
+      cancelIns.type = 'button';
+      cancelIns.className = 'linkbtn';
+      cancelIns.textContent = '✕ Never mind — don\\u2019t add a page here';
+      cancelIns.addEventListener('click', () => {
+        const backTo = insertReturn;
+        insertAt = null;
+        spread = Math.min(backTo, lastSpread());
+        setStatus('');
+        render();
+      });
+      left.appendChild(cancelIns);
+    }
 
     const rightForm = document.createElement('form');
     rightForm.innerHTML =
@@ -1614,11 +1714,16 @@ function readerClientJs(): string {
         const res = await fetch('/v1/books/' + bookId + '/pages', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ text: text, imagePrompt: imagePrompt }),
+          body: JSON.stringify({
+            text: text,
+            imagePrompt: imagePrompt,
+            insertAt: insertAt !== null ? insertAt : undefined,
+          }),
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok && data.ok) {
           clearDraft(); // the page is in the book now
+          insertAt = null;
           book = data.book;
           spread = data.pageIndex + 2; // show the page just added
           setStatus('Your page is in the book! 🎉');
