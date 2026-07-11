@@ -28,7 +28,11 @@ import {
 } from '../books/store.js';
 import { config } from '../config.js';
 import { elevenLabsProvider } from '../providers/elevenlabs.js';
-import { fairyDustProvider } from '../providers/fairyDust.js';
+import {
+  draftSprinkleProvider,
+  fairyDustProvider,
+  suggestPromptProvider,
+} from '../providers/fairyDust.js';
 import { optionalString, requireString, ValidationError } from './validate.js';
 
 /**
@@ -587,6 +591,47 @@ booksApiRouter.post(
       return;
     }
     res.json({ ok: true, book: updated, pageIndex: index });
+  }),
+);
+
+// --- Suggest an image prompt from the page narrative ----------------------------
+// Translates the story words into a concrete "Draw ..." illustration
+// instruction, with character appearances carried from the cover description
+// and earlier picture prompts. Nothing is stored; the form fills its box.
+booksApiRouter.post(
+  '/:id/suggest-image-prompt',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const text = requireString(req.body, 'text', { maxLength: 2000 });
+
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+
+    const outcome = await runGuardedGeneration(suggestPromptProvider, { book, text });
+    res.status(outcome.status).json(outcome.body);
+  }),
+);
+
+// --- Fairy dust on the NEW-page form (draft words, nothing stored yet) ----------
+booksApiRouter.post(
+  '/:id/sprinkle-draft',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const text = requireString(req.body, 'text', { maxLength: 2000 });
+
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+
+    const outcome = await runGuardedGeneration(draftSprinkleProvider, { book, text });
+    res.status(outcome.status).json(outcome.body);
   }),
 );
 

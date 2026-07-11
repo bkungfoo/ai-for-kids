@@ -104,6 +104,128 @@ export const fairyDustProvider: Provider<SprinkleRequest> = {
   },
 };
 
+// --- Draft sprinkle: polish unsaved new-page words (form textarea) --------------
+
+export interface DraftSprinkleRequest {
+  book: Book;
+  /** The draft words in the new-page form. Moderated on input. */
+  text: string;
+}
+
+export const draftSprinkleProvider: Provider<DraftSprinkleRequest> = {
+  name: 'fairy dust',
+
+  isConfigured() {
+    return Boolean(config.providers.gemini.apiKey);
+  },
+
+  inputTexts(req) {
+    return [req.text];
+  },
+
+  async generate(req): Promise<GenerationResult> {
+    const { apiKey, baseUrl } = config.providers.gemini;
+    if (!apiKey) throw new ProviderNotConfiguredError('fairy dust');
+
+    const user =
+      `Here is the story so far:\n\n${storyWithPictures(req.book)}\n\n` +
+      `The child's words for the NEW page being written:\n"""${req.text}"""\n\n` +
+      'Polish them now.';
+
+    const raw = await callGemini(apiKey, baseUrl, EDITOR_PERSONA, user, SPRINKLE_SCHEMA);
+    const polished = pickString(raw, 'text');
+    if (!polished) {
+      throw new ProviderRequestError('fairy dust', 502, 'the editor returned no text');
+    }
+
+    return {
+      textToModerate: [polished],
+      metadataToModerate: [],
+      result: { text: polished },
+    };
+  },
+};
+
+// --- Suggest an image prompt: narrative -> concrete illustration instruction ----
+
+export interface SuggestPromptRequest {
+  book: Book;
+  /** The page narrative to translate into a picture idea. Moderated on input. */
+  text: string;
+}
+
+const SUGGEST_SCHEMA = {
+  type: 'OBJECT',
+  properties: { imagePrompt: { type: 'STRING' } },
+  required: ['imagePrompt'],
+} as const;
+
+const ILLUSTRATOR_PERSONA =
+  "You are the art director of a children's picture-book app for ages 5-12. Given one page's " +
+  'story words (and the story so far), write "imagePrompt": a short, concrete instruction ' +
+  "telling the illustrator exactly what to DRAW for this page — do NOT copy the story " +
+  'sentences. Rules:\n' +
+  '- Start with "Draw ".\n' +
+  '- Show the main moment of the page as one visual scene: who is in it, what each character ' +
+  'is doing, and where.\n' +
+  "- Describe each character's appearance concretely, carrying visual details established by " +
+  'the cover description and earlier pictures (species, size, clothing, colors — e.g. if the ' +
+  'cover shows a small mouse wearing a red cape, say "a small mouse wearing a red cape").\n' +
+  '- Turn feelings and abstract lines into visible things (e.g. "made fun of him" -> other ' +
+  'mice pointing and laughing).\n' +
+  '- 1-3 sentences, gentle and child-friendly. No text or lettering in the picture.';
+
+/**
+ * The story with its VISUAL details (cover description + earlier picture
+ * prompts), so the crafted image prompt keeps characters looking consistent.
+ */
+function storyWithPictures(book: Book, maxChars = 4500): string {
+  const lines: string[] = [`Story title: "${book.title}"`];
+  if (book.coverPrompt) lines.push(`Cover picture: ${book.coverPrompt}`);
+  for (const [i, p] of book.pages.entries()) {
+    if (p.isEnd) continue;
+    lines.push(`Page ${i + 1}: ${p.text}`);
+    if (p.imagePrompt) lines.push(`Page ${i + 1} picture: ${p.imagePrompt}`);
+  }
+  let text = lines.join('\n');
+  if (text.length > maxChars) text = `${text.slice(0, maxChars)}…`;
+  return text;
+}
+
+export const suggestPromptProvider: Provider<SuggestPromptRequest> = {
+  name: 'fairy dust',
+
+  isConfigured() {
+    return Boolean(config.providers.gemini.apiKey);
+  },
+
+  inputTexts(req) {
+    return [req.text];
+  },
+
+  async generate(req): Promise<GenerationResult> {
+    const { apiKey, baseUrl } = config.providers.gemini;
+    if (!apiKey) throw new ProviderNotConfiguredError('fairy dust');
+
+    const user =
+      `Here is the story so far:\n\n${storyWithPictures(req.book)}\n\n` +
+      `The story words on the page being illustrated:\n"""${req.text}"""\n\n` +
+      'Write the imagePrompt for this page.';
+
+    const raw = await callGemini(apiKey, baseUrl, ILLUSTRATOR_PERSONA, user, SUGGEST_SCHEMA);
+    const imagePrompt = pickString(raw, 'imagePrompt').slice(0, 1000);
+    if (!imagePrompt) {
+      throw new ProviderRequestError('fairy dust', 502, 'no picture idea came back');
+    }
+
+    return {
+      textToModerate: [imagePrompt],
+      metadataToModerate: [],
+      result: { imagePrompt },
+    };
+  },
+};
+
 // --- Shared Gemini plumbing ------------------------------------------------------
 
 async function callGemini(

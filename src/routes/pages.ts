@@ -765,6 +765,12 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
           border-color: #c9a9e0; }
         .readbtn.sprinkle:hover { filter: brightness(.97); }
         .readbtn.sprinkle:disabled { opacity: .55; cursor: progress; }
+        .readbtn.suggest { align-self: flex-start; margin: 0 0 8px; background: #fdf6e0; border-color: #d9c37a; }
+        .readbtn.suggest:disabled { opacity: .55; cursor: progress; }
+        .readbtn.theend { background: #fdf0dc; border-color: #d9a37a; }
+        .readbtn.theend:disabled { opacity: .55; cursor: progress; }
+        .words-edit { text-align: center; }
+        .page input.revealed { animation: dustreveal 1s ease; }
         /* Page tools (edit mode) */
         .pagetools { display: flex; flex-wrap: wrap; gap: 4px 10px; justify-content: center;
           margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e0d6bd; }
@@ -1150,6 +1156,53 @@ function readerClientJs(): string {
     }
   }
 
+  // Fairy dust on the NEW-page form: polishes the draft words in the textarea.
+  // The same background-state rules apply, kept on the draft: the first
+  // sprinkle saves the child's words in draft.sourceText, re-sprinkles polish
+  // those, and any manual typing makes the typed text the new background.
+  async function doDraftSprinkle(btn, storyEl) {
+    const source = (draft.sourceText || storyEl.value).trim();
+    if (!source) { setStatus('Write your story words first — then sprinkle! ✍️', 'blocked'); return; }
+    if (sprinkling) return;
+    sprinkling = true;
+    btn.disabled = true;
+    const dust = startDust(left);
+    setStatus('🪄 Sprinkling fairy dust on your words…');
+    const started = Date.now();
+
+    function settle(apply) {
+      const wait = Math.max(0, 1900 - (Date.now() - started));
+      setTimeout(() => { dust.finish(apply); sprinkling = false; btn.disabled = false; }, wait);
+    }
+
+    try {
+      const res = await fetch('/v1/books/' + bookId + '/sprinkle-draft', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: source }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        settle(() => {
+          if (!draft.sourceText) draft.sourceText = source;
+          storyEl.value = data.result.text;
+          draft.text = data.result.text;
+          saveDraft();
+          storyEl.classList.add('revealed');
+          setTimeout(() => storyEl.classList.remove('revealed'), 1100);
+          setStatus('✨ Ta-da! Sprinkle again for a different fix — or keep typing to make it yours.');
+        });
+      } else {
+        settle(() => {
+          const f = friendlyError(res, data);
+          setStatus(f.text, f.cls);
+        });
+      }
+    } catch {
+      settle(() => setStatus('Could not reach the server. Check your connection and try again.', 'error'));
+    }
+  }
+
   /** The "🪄 Sprinkle fairy dust" row on a writing page (edit mode). */
   function sprinkleControls(pageIndex, page) {
     const wrap = document.createElement('div');
@@ -1397,15 +1450,15 @@ function readerClientJs(): string {
     return wrap;
   }
 
-  // "Change the words": edit a saved page's narration in place (left page).
+  // "Edit text": edit a saved page's narration in place (left page).
   // The picture is untouched; the new words are re-checked by the server.
   function wordsEditControls(pageIndex, page, textEl) {
     const wrap = document.createElement('div');
-    wrap.className = 'regen';
+    wrap.className = 'regen words-edit';
     const toggle = document.createElement('button');
     toggle.type = 'button';
-    toggle.className = 'linkbtn';
-    toggle.textContent = '✏️ Change the words';
+    toggle.className = 'readbtn';
+    toggle.textContent = '✏️ Edit text';
     wrap.appendChild(toggle);
 
     toggle.addEventListener('click', () => {
@@ -1829,10 +1882,47 @@ function readerClientJs(): string {
     const rightForm = document.createElement('form');
     rightForm.innerHTML =
       '<label for="imgprompt">What picture should go with it?</label>' +
+      '<button type="button" class="readbtn suggest" id="suggestprompt" ' +
+      'title="Turn the story words into a picture idea">💡 Suggest image prompt</button>' +
       '<input id="imgprompt" type="text" maxlength="1000" required placeholder="A turtle trying on a big red hat" />' +
-      '<button class="cta" id="makepage" type="submit" style="margin-top:14px">🖌️ Paint it &amp; add the page</button>' +
-      '<button class="cta end" id="endbook" type="button">🏁 Finish with a “The End” page</button>';
+      '<button class="cta" id="makepage" type="submit" style="margin-top:14px">🖌️ Paint it!</button>';
     right.appendChild(rightForm);
+
+    // "Suggest image prompt": translate the narrative on the left into a
+    // concrete illustration instruction, in the context of the whole story.
+    // Fills (overwrites) the box; the child still clicks Paint to use it.
+    const suggestBtn = document.getElementById('suggestprompt');
+    suggestBtn.addEventListener('click', async () => {
+      const words = storyEl.value.trim();
+      if (!words) { setStatus('Write your story words on the left first! ✍️', 'blocked'); return; }
+      suggestBtn.disabled = true;
+      const oldLabel = suggestBtn.textContent;
+      suggestBtn.textContent = '💭 Dreaming up a picture…';
+      try {
+        const res = await fetch('/v1/books/' + bookId + '/suggest-image-prompt', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ text: words }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
+          imgEl2.value = (data.result.imagePrompt || '').slice(0, 1000);
+          draft.imagePrompt = imgEl2.value;
+          saveDraft();
+          imgEl2.classList.add('revealed');
+          setTimeout(() => imgEl2.classList.remove('revealed'), 1100);
+          setStatus('💡 How about this? Change any words you like, then hit Paint!');
+        } else {
+          const f = friendlyError(res, data);
+          setStatus(f.text, f.cls);
+        }
+      } catch {
+        setStatus('Could not reach the server. Check your connection and try again.', 'error');
+      } finally {
+        suggestBtn.disabled = false;
+        suggestBtn.textContent = oldLabel;
+      }
+    });
 
     // Restore any in-progress draft, and keep it saved on every keystroke so
     // flipping back through the book (or even a refresh) never loses work.
@@ -1840,23 +1930,35 @@ function readerClientJs(): string {
     const imgEl2 = document.getElementById('imgprompt');
     storyEl.value = draft.text;
     imgEl2.value = draft.imagePrompt;
-    storyEl.addEventListener('input', () => { draft.text = storyEl.value; saveDraft(); });
-    imgEl2.addEventListener('input', () => { draft.imagePrompt = imgEl2.value; saveDraft(); });
-
-    // First time the child clicks over to the picture prompt and it's still
-    // empty, start it off with the narration they just wrote — a ready-made
-    // description they can then tweak. Only once, so deliberately clearing it
-    // doesn't fight back.
-    let prefilled = false;
-    imgEl2.addEventListener('focus', () => {
-      if (prefilled || imgEl2.value.trim()) return;
-      const words = storyEl.value.trim();
-      if (!words) return;
-      prefilled = true;
-      imgEl2.value = words.slice(0, 1000); // input maxlength
-      draft.imagePrompt = imgEl2.value;
+    storyEl.addEventListener('input', () => {
+      draft.text = storyEl.value;
+      // Typing makes the typed words the new fairy-dust background state.
+      delete draft.sourceText;
       saveDraft();
     });
+    imgEl2.addEventListener('input', () => { draft.imagePrompt = imgEl2.value; saveDraft(); });
+
+    // Fairy dust for the draft: polish the words, and (when the picture box is
+    // still empty) craft a "Draw ..." scene instruction to go with them.
+    const dustRow = document.createElement('div');
+    dustRow.className = 'readrow';
+    const dustBtn = document.createElement('button');
+    dustBtn.type = 'button';
+    dustBtn.className = 'readbtn sprinkle';
+    dustBtn.textContent = '🪄 Sprinkle fairy dust';
+    dustBtn.title = 'Magically fix the grammar and make the words flow';
+    dustBtn.addEventListener('click', () => doDraftSprinkle(dustBtn, storyEl));
+    dustRow.appendChild(dustBtn);
+    // "The End" lives beside the sprinkle button (not offered mid-insert).
+    if (!inserting) {
+      const endBtn = document.createElement('button');
+      endBtn.type = 'button';
+      endBtn.className = 'readbtn theend';
+      endBtn.id = 'endbook';
+      endBtn.textContent = '🏁 Finish with “The End”';
+      dustRow.appendChild(endBtn);
+    }
+    form.appendChild(dustRow);
 
     rightForm.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -1897,7 +1999,8 @@ function readerClientJs(): string {
       }
     });
 
-    document.getElementById('endbook').addEventListener('click', async () => {
+    const endbookEl = document.getElementById('endbook');
+    if (endbookEl) endbookEl.addEventListener('click', async () => {
       const btn = document.getElementById('endbook');
       btn.disabled = true;
       setStatus('<span class="spinner"></span>Closing your book…');
