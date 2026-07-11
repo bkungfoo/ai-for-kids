@@ -772,6 +772,10 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .readbtn.suggest:disabled { opacity: .55; cursor: progress; }
         .readbtn.theend { background: #fdf0dc; border-color: #d9a37a; }
         .readbtn.theend:disabled { opacity: .55; cursor: progress; }
+        /* Multi-row image-prompt box: tall enough to read a whole suggestion */
+        .page textarea.prompt { flex: 0 0 auto; min-height: 108px; font-size: 14.5px;
+          line-height: 1.5; font-family: inherit; background: transparent;
+          border: 1px dashed #cbbfa4; }
         .words-edit { text-align: center; }
         .page input.revealed { animation: dustreveal 1s ease; }
         /* Page tools (edit mode) */
@@ -1692,7 +1696,42 @@ function readerClientJs(): string {
     });
   }
 
-  // "Change this picture": re-enter a prompt and repaint this page's artwork.
+  // "Suggest image prompt": translate story words into a concrete "Draw ..."
+  // illustration instruction and fill the target box (overwriting). Shared by
+  // the new-page form and the change-this-picture flow.
+  async function suggestInto(btn, words, target, onFilled) {
+    if (!words) { setStatus('Write your story words on the left first! ✍️', 'blocked'); return; }
+    btn.disabled = true;
+    const oldLabel = btn.textContent;
+    btn.textContent = '💭 Dreaming up a picture…';
+    try {
+      const res = await fetch('/v1/books/' + bookId + '/suggest-image-prompt', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: words }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        target.value = (data.result.imagePrompt || '').slice(0, 1000);
+        if (onFilled) onFilled();
+        target.classList.add('revealed');
+        setTimeout(() => target.classList.remove('revealed'), 1100);
+        setStatus('💡 How about this? Change any words you like, then hit Paint!');
+      } else {
+        const f = friendlyError(res, data);
+        setStatus(f.text, f.cls);
+      }
+    } catch {
+      setStatus('Could not reach the server. Check your connection and try again.', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = oldLabel;
+    }
+  }
+
+  // "Change this picture": swap the right page for the same picture workflow
+  // as making a new page (prompt box, Suggest image prompt, Paint it!) — plus
+  // a Cancel that brings the old picture back untouched.
   function regenControls(pageIndex, page) {
     const wrap = document.createElement('div');
     wrap.className = 'regen';
@@ -1703,29 +1742,54 @@ function readerClientJs(): string {
     wrap.appendChild(toggle);
 
     toggle.addEventListener('click', () => {
-      toggle.remove();
       closeDrawTool(); // no drawing while changing the picture
+      right.innerHTML = ''; // the form takes the picture's place until done
+
       const form = document.createElement('form');
       const label = document.createElement('label');
-      label.textContent = 'Describe the new picture';
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.maxLength = 1000;
-      input.required = true;
-      input.value = page.imagePrompt || '';
+      label.textContent = 'What picture should go with it?';
+      form.appendChild(label);
+
+      const sbtn = document.createElement('button');
+      sbtn.type = 'button';
+      sbtn.className = 'readbtn suggest';
+      sbtn.title = 'Turn the story words into a picture idea';
+      sbtn.textContent = '💡 Suggest image prompt';
+      sbtn.addEventListener('click', () => suggestInto(sbtn, (page.text || '').trim(), ta));
+      form.appendChild(sbtn);
+
+      const ta = document.createElement('textarea');
+      ta.className = 'prompt';
+      ta.rows = 5;
+      ta.maxLength = 1000;
+      ta.required = true;
+      ta.value = page.imagePrompt || '';
+      form.appendChild(ta);
+
       const btn = document.createElement('button');
       btn.type = 'submit';
       btn.className = 'cta';
-      btn.textContent = '🖌️ Repaint it';
-      form.appendChild(label); form.appendChild(input); form.appendChild(btn);
-      wrap.appendChild(form);
-      input.focus();
+      btn.style.marginTop = '14px';
+      btn.textContent = '🖌️ Paint it!';
+      form.appendChild(btn);
+
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'cta cancel';
+      cancel.style.marginTop = '10px';
+      cancel.textContent = '↩️ Cancel — keep the old picture';
+      cancel.addEventListener('click', () => { setStatus(''); render(); });
+      form.appendChild(cancel);
+
+      right.appendChild(form);
+      ta.focus();
 
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const imagePrompt = input.value.trim();
+        const imagePrompt = ta.value.trim();
         if (!imagePrompt) return;
         btn.disabled = true;
+        cancel.disabled = true;
         setStatus('<span class="spinner"></span>Painting a new picture…');
         try {
           const res = await fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/image', {
@@ -1743,9 +1807,11 @@ function readerClientJs(): string {
           const f = friendlyError(res, data);
           setStatus(f.text, f.cls);
           btn.disabled = false;
+          cancel.disabled = false;
         } catch {
           setStatus('Could not reach the server. Check your connection and try again.', 'error');
           btn.disabled = false;
+          cancel.disabled = false;
         }
       });
     });
@@ -1887,45 +1953,18 @@ function readerClientJs(): string {
       '<label for="imgprompt">What picture should go with it?</label>' +
       '<button type="button" class="readbtn suggest" id="suggestprompt" ' +
       'title="Turn the story words into a picture idea">💡 Suggest image prompt</button>' +
-      '<input id="imgprompt" type="text" maxlength="1000" required placeholder="A turtle trying on a big red hat" />' +
+      '<textarea id="imgprompt" class="prompt" rows="5" maxlength="1000" required placeholder="A turtle trying on a big red hat"></textarea>' +
       '<button class="cta" id="makepage" type="submit" style="margin-top:14px">🖌️ Paint it!</button>';
     right.appendChild(rightForm);
 
-    // "Suggest image prompt": translate the narrative on the left into a
-    // concrete illustration instruction, in the context of the whole story.
-    // Fills (overwrites) the box; the child still clicks Paint to use it.
+    // "Suggest image prompt": fills (overwrites) the box from the narrative on
+    // the left; the child still clicks Paint to use it.
     const suggestBtn = document.getElementById('suggestprompt');
-    suggestBtn.addEventListener('click', async () => {
-      const words = storyEl.value.trim();
-      if (!words) { setStatus('Write your story words on the left first! ✍️', 'blocked'); return; }
-      suggestBtn.disabled = true;
-      const oldLabel = suggestBtn.textContent;
-      suggestBtn.textContent = '💭 Dreaming up a picture…';
-      try {
-        const res = await fetch('/v1/books/' + bookId + '/suggest-image-prompt', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ text: words }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && data.ok) {
-          imgEl2.value = (data.result.imagePrompt || '').slice(0, 1000);
-          draft.imagePrompt = imgEl2.value;
-          saveDraft();
-          imgEl2.classList.add('revealed');
-          setTimeout(() => imgEl2.classList.remove('revealed'), 1100);
-          setStatus('💡 How about this? Change any words you like, then hit Paint!');
-        } else {
-          const f = friendlyError(res, data);
-          setStatus(f.text, f.cls);
-        }
-      } catch {
-        setStatus('Could not reach the server. Check your connection and try again.', 'error');
-      } finally {
-        suggestBtn.disabled = false;
-        suggestBtn.textContent = oldLabel;
-      }
-    });
+    suggestBtn.addEventListener('click', () =>
+      suggestInto(suggestBtn, storyEl.value.trim(), imgEl2, () => {
+        draft.imagePrompt = imgEl2.value;
+        saveDraft();
+      }));
 
     // Restore any in-progress draft, and keep it saved on every keystroke so
     // flipping back through the book (or even a refresh) never loses work.
