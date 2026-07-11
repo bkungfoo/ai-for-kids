@@ -1871,7 +1871,7 @@ function readerClientJs(): string {
       const cancelIns = document.createElement('button');
       cancelIns.type = 'button';
       cancelIns.className = 'linkbtn';
-      cancelIns.textContent = '✕ Never mind — don\\u2019t add a page here';
+      cancelIns.textContent = '✕ Cancel adding page';
       cancelIns.addEventListener('click', () => {
         const backTo = insertReturn;
         insertAt = null;
