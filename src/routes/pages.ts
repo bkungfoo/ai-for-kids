@@ -200,6 +200,9 @@ pagesRouter.get('/images', (_req: Request, res: Response) => res.redirect('/book
 /** Friendly error text shared by the storybook pages' client scripts. */
 const CLIENT_HELPERS_JS = `
   function friendlyError(res, data) {
+    if (data && data.code === 'credits_exhausted') {
+      return { text: '🪫 ' + (data.error || 'The AI credits have run out — ask a grown-up to top up the account.'), cls: 'error' };
+    }
     if (res.status === 403 && data && data.blocked) {
       return { text: data.message || "Let's try a different idea — keep it friendly and safe!", cls: 'blocked' };
     }

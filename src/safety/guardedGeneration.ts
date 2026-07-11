@@ -5,6 +5,8 @@ import {
   type GenerationResult,
   type Provider,
 } from '../providers/types.js';
+import { sendOperatorAlert } from '../util/alerts.js';
+import { CreditsExhaustedError, isCreditsErrorMessage } from '../util/credits.js';
 import { recordBlocked } from './blockedStore.js';
 import { guardText } from './pipeline.js';
 import { safeSearchImages } from './safeSearch.js';
@@ -58,6 +60,19 @@ export async function runGuardedGeneration<Req>(
   } catch (err) {
     if (err instanceof ProviderNotConfiguredError) {
       return { status: 501, body: { ok: false, error: err.message } };
+    }
+    // A generation provider ran out of credits/quota: page the owner and
+    // surface a distinct error (errorHandler turns this into a 503 with
+    // code=credits_exhausted) instead of a vague failure.
+    if (err instanceof ProviderRequestError && isCreditsErrorMessage(err.message)) {
+      sendOperatorAlert(
+        `credits-provider-${provider.name}`,
+        `⚠️ Harbor House: AI credits exhausted (${provider.name})`,
+        `Generation requests are failing because the "${provider.name}" provider ` +
+          `reports its credits/quota ran out.\n\nAPI error: ${err.message}\n\n` +
+          'Top up the account to restore service; no restart is needed.',
+      );
+      throw new CreditsExhaustedError(provider.name, err.message);
     }
     if (err instanceof ProviderRequestError) {
       logger.error('provider request error', { provider: provider.name, message: err.message });

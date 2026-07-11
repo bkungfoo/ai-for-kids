@@ -1,6 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
+import { sendOperatorAlert } from '../util/alerts.js';
+import { CreditsExhaustedError, isCreditsErrorMessage } from '../util/credits.js';
 import { Semaphore } from '../util/semaphore.js';
 import { CHILD_SAFETY_RUBRIC, buildModerationPrompt } from './rubric.js';
 import {
@@ -87,10 +89,27 @@ export async function moderate(
       ? await classifyWithGemini(text, direction)
       : await classifyWithClaude(text, direction);
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // Ran out of credits/quota? That's an operator problem, not a content
+    // problem — page the owner and surface a distinct error instead of the
+    // child-facing safety-block message. (The request is still not allowed
+    // through unmoderated.)
+    if (isCreditsErrorMessage(message)) {
+      const provider = moderationEngine() === 'gemini' ? 'Google Gemini' : 'Anthropic';
+      sendOperatorAlert(
+        `credits-${moderationEngine()}`,
+        `⚠️ Harbor House: AI credits exhausted (${provider})`,
+        `Child requests are failing because the ${provider} API (used for safety ` +
+          `moderation, model ${config.moderation.model}) reports its credits/quota ` +
+          `ran out.\n\nAPI error: ${message}\n\nTop up the account to restore service; ` +
+          'no restart is needed.',
+      );
+      throw new CreditsExhaustedError(provider, message);
+    }
     logger.error('moderation call failed', {
       direction,
-      error: err instanceof Error ? err.message : String(err),
       engine: moderationEngine(),
+      error: message,
     });
     return failVerdict('moderation_error', direction);
   } finally {

@@ -127,6 +127,21 @@ export const config = {
     cookieSecure: bool('COOKIE_SECURE', false),
   },
 
+  // Operator alerting (e.g. "AI credits ran out"). Email is sent via
+  // ALERT_SMTP_* when configured (GCP blocks direct port-25 delivery, so a
+  // relay such as smtp.gmail.com:465 + a Gmail App Password is needed);
+  // otherwise the local sendmail binary is tried, and the alert is always
+  // written to the service journal.
+  alerts: {
+    email: str('ALERT_EMAIL', 'brian.foo@gmail.com'),
+    smtp: {
+      host: str('ALERT_SMTP_HOST'),
+      port: int('ALERT_SMTP_PORT', 465),
+      user: str('ALERT_SMTP_USER'),
+      pass: str('ALERT_SMTP_PASS'),
+    },
+  },
+
   // Adult-only operator review area (see reviewPassword above). Disabled unless
   // a password is configured. Uses its own cookie/session, separate from the
   // child login, with a shorter default lifetime.
