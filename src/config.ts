@@ -201,6 +201,9 @@ export const config = {
     geminiTts: {
       model: str('GEMINI_TTS_MODEL', 'gemini-3.1-flash-tts-preview'),
       voice: str('GEMINI_TTS_VOICE', 'Leda'),
+      // Playback tempo applied during the MP3 encode (pitch-preserving).
+      // 1.2 = 20% faster than the model's natural read. Clamped to 0.5–2.
+      speed: Math.min(2, Math.max(0.5, Number(str('NARRATION_SPEED', '1.2')) || 1.2)),
     },
   },
 } as const;

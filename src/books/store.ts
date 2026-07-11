@@ -47,6 +47,12 @@ export interface BookNarration {
   mimeType: string;
   dataBase64: string;
   voiceId: string;
+  /**
+   * Cache-validity key: engine + voice + speed + format revision. A cached
+   * narration is replayed only while this matches the current configuration —
+   * anything else (including pre-key entries) is regenerated.
+   */
+  key?: string;
 }
 
 /** 'draft' books live on the owner's shelf; 'published' ones appear in the library. */

@@ -27,6 +27,7 @@ import {
   type BookPage,
 } from '../books/store.js';
 import { config } from '../config.js';
+import { logger } from '../logger.js';
 import { elevenLabsProvider } from '../providers/elevenlabs.js';
 import { geminiTtsProvider } from '../providers/geminiTts.js';
 import {
@@ -310,6 +311,11 @@ booksApiRouter.get(
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
+    // Hide narration cached under an old voice/speed so the reader regenerates
+    // instead of playing stale audio (response only; the file is untouched).
+    for (const page of book.pages) {
+      if (page.narration && !validNarration(page)) delete page.narration;
+    }
     res.json({ ok: true, book });
   }),
 );
@@ -375,6 +381,8 @@ booksApiRouter.post(
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
+    // Pre-generate the read-aloud audio so "Read to me" starts instantly.
+    warmNarration(bookId, added.pageIndex, text);
     res.status(201).json({ ok: true, book: added.book, pageIndex: added.pageIndex });
   }),
 );
@@ -467,6 +475,8 @@ booksApiRouter.patch(
       res.status(404).json({ ok: false, error: 'Page not found' });
       return;
     }
+    // Pre-generate the read-aloud audio for the new words.
+    warmNarration(bookId, index, text);
     res.json({ ok: true, book: updated, pageIndex: index });
   }),
 );
@@ -504,6 +514,81 @@ booksApiRouter.put(
 );
 
 // --- Read-aloud narration for a page (generated once, then cached) -------------
+
+/**
+ * Cache-validity key for stored narration: engine + voice + speed + format
+ * revision. Cached audio is replayed only while this matches (so changing the
+ * voice or tempo — or old pre-key entries — regenerates instead of playing
+ * stale audio).
+ */
+function narrationKey(): string {
+  if (elevenLabsProvider.isConfigured()) {
+    return `el:${config.providers.elevenlabs.narratorVoiceId}:r2`;
+  }
+  const { model, voice, speed } = config.providers.geminiTts;
+  return `gt:${model}:${voice}:${speed}:r2`;
+}
+
+function validNarration(page: BookPage) {
+  return page.narration && page.narration.key === narrationKey() ? page.narration : undefined;
+}
+
+/**
+ * Synthesize narration for one page's words through the guarded pipeline.
+ * Engine: ElevenLabs when its key is set, else Gemini TTS on the AI Studio
+ * key. Returns the narration payload, or the non-200 outcome for forwarding.
+ */
+async function synthesizeNarration(text: string) {
+  const outcome = elevenLabsProvider.isConfigured()
+    ? await runGuardedGeneration(elevenLabsProvider, {
+        text,
+        voiceId: config.providers.elevenlabs.narratorVoiceId,
+      })
+    : await runGuardedGeneration(geminiTtsProvider, { text });
+  if (outcome.status !== 200) return { outcome, narration: undefined };
+  const result = outcome.body.result as {
+    contentType: string;
+    audioBase64: string;
+    voiceId: string;
+  };
+  return {
+    outcome,
+    narration: {
+      mimeType: result.contentType,
+      dataBase64: result.audioBase64,
+      voiceId: result.voiceId,
+      key: narrationKey(),
+    },
+  };
+}
+
+/**
+ * Pre-generate a page's narration in the background so the first "Read to me"
+ * doesn't lag. Fired (not awaited) after the page's words are created or
+ * changed. Saves only if the words are still the same when the audio is ready
+ * (a fast follow-up edit wins), and never breaks the request that spawned it.
+ */
+function warmNarration(bookId: string, pageIndex: number, text: string): void {
+  void (async () => {
+    try {
+      const { narration } = await synthesizeNarration(text);
+      if (!narration) return; // engine unconfigured / blocked — nothing to warm
+      const book = await getBook(bookId);
+      const page = book?.pages[pageIndex];
+      if (!book || !page || page.text !== text) return; // page changed/moved meanwhile
+      if (validNarration(page)) return; // someone already narrated it
+      await updatePage(bookId, pageIndex, { narration });
+      logger.info('narration pre-generated', { bookId, pageIndex, bytes: narration.dataBase64.length });
+    } catch (err) {
+      logger.warn('narration pre-generation failed', {
+        bookId,
+        pageIndex,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  })();
+}
+
 booksApiRouter.post(
   '/:id/pages/:index/narration',
   asyncHandler(async (req, res) => {
@@ -525,35 +610,20 @@ booksApiRouter.post(
       return;
     }
 
-    // Cached? Replay for free.
-    if (page.narration) {
-      res.json({ ok: true, narration: page.narration, pageIndex: index, cached: true });
+    // Cached (and still matching the current voice/speed)? Replay for free.
+    const cached = validNarration(page);
+    if (cached) {
+      res.json({ ok: true, narration: cached, pageIndex: index, cached: true });
       return;
     }
 
-    // Narrator engine: ElevenLabs when its key is set, else Gemini TTS on the
-    // AI Studio key. 501 only when neither is configured — the reader then
-    // falls back to the browser's built-in speech synthesis.
-    const outcome = elevenLabsProvider.isConfigured()
-      ? await runGuardedGeneration(elevenLabsProvider, {
-          text: page.text,
-          voiceId: config.providers.elevenlabs.narratorVoiceId,
-        })
-      : await runGuardedGeneration(geminiTtsProvider, { text: page.text });
-    if (outcome.status !== 200) {
+    // 501 only when no narrator engine is configured — the reader then falls
+    // back to the browser's built-in speech synthesis.
+    const { outcome, narration } = await synthesizeNarration(page.text);
+    if (!narration) {
       res.status(outcome.status).json(outcome.body);
       return;
     }
-    const result = outcome.body.result as {
-      contentType: string;
-      audioBase64: string;
-      voiceId: string;
-    };
-    const narration = {
-      mimeType: result.contentType,
-      dataBase64: result.audioBase64,
-      voiceId: result.voiceId,
-    };
     await updatePage(bookId, index, { narration });
     res.json({ ok: true, narration, pageIndex: index });
   }),
@@ -600,6 +670,8 @@ booksApiRouter.post(
       res.status(404).json({ ok: false, error: 'Page not found' });
       return;
     }
+    // Pre-generate the read-aloud audio for the polished words.
+    warmNarration(bookId, index, polished);
     res.json({ ok: true, book: updated, pageIndex: index });
   }),
 );
@@ -740,6 +812,7 @@ booksApiRouter.post(
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
+    warmNarration(bookId, added.pageIndex, 'The End');
     res.status(201).json({ ok: true, book: added.book, pageIndex: added.pageIndex });
   }),
 );

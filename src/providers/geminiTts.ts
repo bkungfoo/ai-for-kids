@@ -118,12 +118,16 @@ async function compressAudio(
 }
 
 function pcmToMp3(pcm: Buffer, rate: number): Promise<Buffer> {
+  // Pitch-preserving tempo boost: the model's natural read is a touch slow
+  // for read-alongs, so speed it up (NARRATION_SPEED, default 1.2 = +20%).
+  const speed = config.providers.geminiTts.speed;
   return new Promise((resolve, reject) => {
     const child = execFile(
       'ffmpeg',
       // s16le mono in on stdin -> 64kbps mp3 on stdout (plenty for speech).
       ['-hide_banner', '-loglevel', 'error', '-f', 's16le', '-ar', String(rate), '-ac', '1',
-        '-i', 'pipe:0', '-codec:a', 'libmp3lame', '-b:a', '64k', '-f', 'mp3', 'pipe:1'],
+        '-i', 'pipe:0', '-filter:a', `atempo=${speed}`,
+        '-codec:a', 'libmp3lame', '-b:a', '64k', '-f', 'mp3', 'pipe:1'],
       { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 },
       (err, stdout) => {
         if (err) reject(err);

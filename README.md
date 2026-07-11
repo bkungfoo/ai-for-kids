@@ -138,7 +138,12 @@ guarded pipeline on the first configured engine — ElevenLabs
 (`ELEVENLABS_NARRATOR_VOICE`) when its key is set, otherwise **Gemini TTS** on
 the AI Studio key (`GEMINI_TTS_MODEL`/`GEMINI_TTS_VOICE`, delivered "warmly,
 for a young child"; compressed to MP3 via ffmpeg) — and is cached on the page
-(`page.narration`, cleared when the words change). It is allowed on published
+(`page.narration`, keyed by engine + voice + speed so config changes
+regenerate instead of replaying stale audio, and cleared when the words
+change). Narration is also **pre-generated in the background** whenever a
+page's words are created or changed (add page, edit text, fairy dust), so the
+first "Read to me" starts instantly. Playback tempo is `NARRATION_SPEED`
+(default 1.2). It is allowed on published
 library books too — derived audio of already-moderated words, not an edit.
 With neither engine configured the reader falls back to the browser's built-in
 speech synthesis, which also highlights each word as it is spoken.
