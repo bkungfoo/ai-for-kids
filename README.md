@@ -215,11 +215,14 @@ we rebuild the context from the storybook on every call to keep characters,
 objects and settings consistent from page to page:
 
 - **prompt** — the scene to draw now, plus reinforcement instructions ("copy the
-  same characters, objects and art style from the reference pictures"), with the
-  **story so far** appended as extra context;
-- **reference images** — the earlier illustrations (the cover as the main
-  character anchor, plus the most recent pages, capped at 6), which Nano Banana
-  Pro copies faces, clothing, objects and style from (it accepts up to 14).
+  same characters, objects, art style — and the same NUMBER of each character —
+  from the reference pictures"), with the **whole story** appended as extra
+  context (pages before AND after the one being painted, so a mid-book repaint
+  or insert honors details established on later pages too);
+- **reference images** — the cover (main-character anchor) plus the page
+  illustrations NEAREST the target position, from both directions, capped at 6
+  (Nano Banana Pro accepts up to 14). A repaint excludes the page's own old
+  picture so it doesn't anchor the composition being replaced.
 
 The Gemini engine gets the same three channels (reference pictures as inline
 image parts; story so far + scene as the text prompt), so consistency works

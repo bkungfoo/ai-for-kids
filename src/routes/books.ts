@@ -64,19 +64,20 @@ function coverPrompt(title: string, userPrompt?: string): string {
   );
 }
 
-/** Most recent story text that fits the budget (drop oldest pages first). */
+/** Story text that fits the budget (pages nearest the target win). */
 const STORY_CONTEXT_MAX_CHARS = 2500;
 
 /**
- * Cover + up to five recent page images. Nano Banana Pro accepts up to 14
- * references; we keep it small (the cover as the main-character anchor, plus the
- * latest pages) to bound the request while staying visually consistent.
+ * Cover + up to five page images. Nano Banana Pro accepts up to 14 references;
+ * we keep it small (the cover as the main-character anchor, plus the pages
+ * nearest the one being painted) to bound the request while staying visually
+ * consistent.
  */
 const MAX_REFERENCE_IMAGES = 6;
 
 /**
- * The scene to draw for one page, with reinforcement instructions. The narrative
- * so far is passed SEPARATELY (as `context`) and earlier pictures as reference
+ * The scene to draw for one page, with reinforcement instructions. The story
+ * is passed SEPARATELY (as `context`) and other pages' pictures as reference
  * images, so a stateless engine can still keep characters and objects consistent.
  */
 function pageScenePrompt(
@@ -86,12 +87,14 @@ function pageScenePrompt(
   hasReferences: boolean,
 ): string {
   const reinforcement = hasReferences
-    ? 'You are also given reference pictures from earlier pages of THIS SAME book. ' +
-      'Copy the exact same characters (their faces, hair, skin tone and clothing), objects and ' +
-      'art style from those reference pictures so the whole book looks consistent — including any ' +
-      'changes that already happened to them (for example, a scraped knee stays scraped).'
-    : 'Keep the picture consistent with the story so far — the same characters, places and ' +
-      'objects, including any changes that happened to them in earlier pages.';
+    ? 'You are also given reference pictures from other pages of THIS SAME book (earlier and ' +
+      'later ones). Copy the exact same characters (their faces, hair, skin tone and clothing), ' +
+      'objects and art style from those reference pictures so the whole book looks consistent — ' +
+      'the SAME NUMBER of each character or group as the other pictures show, wearing the same ' +
+      'clothes — including any changes the story already made to them (for example, a scraped ' +
+      'knee stays scraped).'
+    : 'Keep the picture consistent with the rest of the story — the same characters, places and ' +
+      'objects, including any changes that happen to them across the pages.';
   return (
     `Illustration for one page of a children's picture storybook titled "${book.title}", ` +
     'in a bright, colorful, friendly art style. No text, words or lettering in the image.\n' +
@@ -101,30 +104,55 @@ function pageScenePrompt(
   );
 }
 
-/** The narrative so far (most recent pages that fit the budget), or undefined. */
-function storyContext(priorTexts: string[]): string | undefined {
-  const parts: string[] = [];
+/**
+ * The WHOLE story as context — pages before and after the one being painted —
+ * so a mid-book repaint or insert stays consistent with what is established on
+ * later pages too (who wears what, how many siblings there are, ...). When the
+ * budget bites, the pages nearest the target position win. `targetPos` is the
+ * page's index (use index - 0.5 / pages.length - 0.5 for a page that isn't in
+ * the array yet, i.e. an insert or append).
+ */
+function wholeStoryContext(pages: BookPage[], targetPos: number): string | undefined {
+  const story = pages
+    .map((p, i) => ({ i, text: p.text, isEnd: p.isEnd }))
+    .filter((p) => !p.isEnd && p.text.trim());
+  const byDistance = [...story].sort(
+    (a, b) => Math.abs(a.i - targetPos) - Math.abs(b.i - targetPos),
+  );
+  const keep = new Set<number>();
   let used = 0;
-  for (let i = priorTexts.length - 1; i >= 0; i--) {
-    const t = priorTexts[i]!;
-    if (used + t.length > STORY_CONTEXT_MAX_CHARS) break;
-    parts.unshift(t);
-    used += t.length;
+  for (const p of byDistance) {
+    if (used + p.text.length > STORY_CONTEXT_MAX_CHARS) break;
+    keep.add(p.i);
+    used += p.text.length;
   }
-  return parts.length ? `The story so far (earlier pages):\n${parts.join('\n')}` : undefined;
+  if (keep.size === 0) return undefined;
+  const lines = story
+    .filter((p) => keep.has(p.i))
+    .map((p) => `Page ${p.i + 1}${p.i === targetPos ? ' (the page being illustrated)' : ''}: ${p.text}`);
+  return (
+    'The whole story, for consistency (characters, their clothing, places, and how MANY of ' +
+    `each character there are must match every other page):\n${lines.join('\n')}`
+  );
 }
 
 /**
- * Earlier pictures to hand the model as visual references: the cover (main
- * character anchor) followed by the most recent page images, capped.
+ * Pictures to hand the model as visual references: the cover (main-character
+ * anchor) plus the page images NEAREST the target position — from both before
+ * and after it, so details established on later pages carry into a repaint or
+ * a mid-book insert. `excludeIndex` skips the page being repainted (its old
+ * picture would anchor the model to the composition we are replacing).
  */
-function referenceImages(book: Book, priorPages: BookPage[]): BookImage[] {
+function referenceImages(book: Book, targetPos: number, excludeIndex?: number): BookImage[] {
   const refs: BookImage[] = [];
   if (book.cover) refs.push(book.cover);
-  const pageImages = priorPages
-    .map((p) => p.image)
-    .filter((img): img is BookImage => Boolean(img));
-  refs.push(...pageImages.slice(-(MAX_REFERENCE_IMAGES - refs.length)));
+  const nearest = book.pages
+    .map((p, i) => ({ i, image: p.image }))
+    .filter((c): c is { i: number; image: BookImage } => Boolean(c.image) && c.i !== excludeIndex)
+    .sort((a, b) => Math.abs(a.i - targetPos) - Math.abs(b.i - targetPos))
+    .slice(0, MAX_REFERENCE_IMAGES - refs.length)
+    .sort((a, b) => a.i - b.i); // hand them over in book order
+  refs.push(...nearest.map((c) => c.image));
   return refs;
 }
 
@@ -356,15 +384,14 @@ booksApiRouter.post(
     }
 
     // The illustration runs through the full guarded pipeline. We hand the
-    // engine the story so far (context) and the earlier pictures (references) so
-    // characters, objects and settings stay consistent from page to page. For a
-    // mid-book insert, "the story so far" is the pages BEFORE the insert point.
-    const priorPages =
-      insertAt === undefined ? existing.pages : existing.pages.slice(0, insertAt);
-    const refs = referenceImages(existing, priorPages);
+    // engine the whole story (context) and the nearest pages' pictures
+    // (references) — before AND after the target position, so a mid-book
+    // insert stays consistent with what later pages establish too.
+    const targetPos = (insertAt ?? existing.pages.length) - 0.5; // between pages
+    const refs = referenceImages(existing, targetPos);
     const outcome = await runGuardedGeneration(imageProviderFor(existing.imageEngine), {
       prompt: pageScenePrompt(existing, text, imagePrompt, refs.length > 0),
-      context: storyContext(priorPages.map((p) => p.text)),
+      context: wholeStoryContext(existing.pages, targetPos),
       referenceImages: refs,
     });
     if (outcome.status !== 200) {
@@ -403,11 +430,13 @@ booksApiRouter.post(
     }
     if (book.status === 'published') return publishedConflict(res);
 
-    const priorPages = book.pages.slice(0, index);
-    const refs = referenceImages(book, priorPages);
+    // Whole-book context: pages AFTER this one count too (characters keep the
+    // clothes and group sizes established anywhere in the book). The page's own
+    // old picture is excluded so it doesn't anchor the composition we replace.
+    const refs = referenceImages(book, index, index);
     const outcome = await runGuardedGeneration(imageProviderFor(book.imageEngine), {
       prompt: pageScenePrompt(book, page.text, imagePrompt, refs.length > 0),
-      context: storyContext(priorPages.map((p) => p.text)),
+      context: wholeStoryContext(book.pages, index),
       referenceImages: refs,
     });
     if (outcome.status !== 200) {
