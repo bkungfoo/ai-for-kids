@@ -23,6 +23,8 @@ import {
   type BookImage,
   type BookPage,
 } from '../books/store.js';
+import { config } from '../config.js';
+import { elevenLabsProvider } from '../providers/elevenlabs.js';
 import { optionalString, requireString, ValidationError } from './validate.js';
 
 /**
@@ -435,7 +437,8 @@ booksApiRouter.patch(
       return;
     }
 
-    const updated = await updatePage(bookId, index, { text });
+    // New words invalidate any cached read-aloud audio for the page.
+    const updated = await updatePage(bookId, index, { text, narration: null });
     if (!updated) {
       res.status(404).json({ ok: false, error: 'Page not found' });
       return;
@@ -473,6 +476,53 @@ booksApiRouter.put(
       return;
     }
     res.json({ ok: true, book: updated, pageIndex: index });
+  }),
+);
+
+// --- Read-aloud narration for a page (generated once, then cached) -------------
+booksApiRouter.post(
+  '/:id/pages/:index/narration',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const index = Number.parseInt(req.params.index ?? '', 10);
+
+    // Same visibility rule as reading the book: the owner always may; anyone
+    // signed in may narrate a PUBLISHED library book. Narration is derived
+    // audio of already-moderated words, not an edit, so published books allow
+    // it too (the audio is cached into the book so it is generated only once).
+    const book = await getBook(bookId);
+    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    const page = Number.isInteger(index) && index >= 0 ? book.pages[index] : undefined;
+    if (!page || !page.text) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+
+    // Cached? Replay for free.
+    if (page.narration) {
+      res.json({ ok: true, narration: page.narration, pageIndex: index, cached: true });
+      return;
+    }
+
+    // 501 when ElevenLabs isn't configured — the reader then falls back to the
+    // browser's built-in speech synthesis.
+    const voiceId = config.providers.elevenlabs.narratorVoiceId;
+    const outcome = await runGuardedGeneration(elevenLabsProvider, { text: page.text, voiceId });
+    if (outcome.status !== 200) {
+      res.status(outcome.status).json(outcome.body);
+      return;
+    }
+    const result = outcome.body.result as { contentType: string; audioBase64: string };
+    const narration = {
+      mimeType: result.contentType,
+      dataBase64: result.audioBase64,
+      voiceId,
+    };
+    await updatePage(bookId, index, { narration });
+    res.json({ ok: true, narration, pageIndex: index });
   }),
 );
 

@@ -29,6 +29,17 @@ export interface BookPage {
   drawing?: BookImage | null;
   /** True for the closing "The End" page. */
   isEnd?: boolean;
+  /**
+   * Cached read-aloud audio for this page's text (generated once, replayed
+   * free). Cleared whenever the words change. Null/absent means not narrated.
+   */
+  narration?: BookNarration | null;
+}
+
+export interface BookNarration {
+  mimeType: string;
+  dataBase64: string;
+  voiceId: string;
 }
 
 /** 'draft' books live on the owner's shelf; 'published' ones appear in the library. */

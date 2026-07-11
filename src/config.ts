@@ -145,6 +145,9 @@ export const config = {
     elevenlabs: {
       apiKey: str('ELEVENLABS_API_KEY'),
       baseUrl: str('ELEVENLABS_BASE_URL', 'https://api.elevenlabs.io'),
+      // Storybook read-aloud narrator voice. When no ElevenLabs key is set the
+      // reader falls back to the browser's built-in speech synthesis.
+      narratorVoiceId: str('ELEVENLABS_NARRATOR_VOICE', 'EXAVITQu4vr4xnSDxMaL'),
     },
     gemini: {
       apiKey: str('GEMINI_API_KEY'),

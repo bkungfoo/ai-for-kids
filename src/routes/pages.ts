@@ -715,6 +715,15 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .regen form { flex-direction: column; gap: 8px; height: auto; }
         .regen input[type=text] { background: transparent; border: 1px dashed #cbbfa4; font-size: 14px; }
         .regen .cta { padding: 9px 14px; font-size: 14px; margin-top: 8px; }
+        /* Read-aloud */
+        .readrow { display: flex; gap: 10px; align-items: center; justify-content: center; margin-top: 10px; }
+        .readbtn { font-size: 13px; font-weight: 700; padding: 6px 12px; border-radius: 999px;
+          border: 1px solid #cbbfa4; background: #fdf9f0; color: #5a4632; cursor: pointer; }
+        .readbtn:hover { background: #f2e9d6; }
+        .readbtn.reading { background: #8a5a00; border-color: #8a5a00; color: #fff; }
+        .w.said { background: #ffe9a8; border-radius: 4px; }
+        /* On the closed cover the read button sits on a paper strip below the art */
+        .book.closed .page-right .readrow { padding: 12px 16px 4px; position: relative; z-index: 2; }
         /* The End page */
         .the-end-art { margin: auto; font-size: 56px; text-align: center; letter-spacing: 8px; }
         .cta.end { background: #8a5a00; margin-top: 10px; }
@@ -732,7 +741,7 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
           .page { min-height: 260px; }
         }
       </style>`,
-    }) + `<script>${CLIENT_HELPERS_JS}${readerClientJs()}</script>`,
+    }) + `<script>${CLIENT_HELPERS_JS}${AUTHORS_JS}${readerClientJs()}</script>`,
   );
 });
 
@@ -802,7 +811,202 @@ function readerClientJs(): string {
     return d;
   }
 
+  // ===== Read aloud ==========================================================
+  // Each page gets a "Read to me" button. High-quality narration comes from the
+  // server (generated once through the moderated pipeline, then cached on the
+  // page); when that isn't set up (501) we fall back to the browser's built-in
+  // voice, which also gives word-by-word highlighting. The cover offers "Read
+  // this book to me", which reads on and flips the pages by itself.
+  let reading = null;      // { btn, btnLabel, audio?, utter?, restore? }
+  let readAllMode = false; // auto-advance through the whole book
+  let advancing = false;   // suppress stopReading() during an auto page flip
+  let curReadBtn = null;   // the current spread's read button (for read-all)
+  let curReadStart = null; // starts reading the current spread (set in render)
+
+  function stopReading() {
+    readAllMode = false;
+    haltPlayback();
+  }
+  function haltPlayback() {
+    if (!reading) return;
+    const r = reading;
+    reading = null; // first, so cancel-triggered onend callbacks see it
+    if (r.audio) { try { r.audio.pause(); } catch {} }
+    if (r.utter && window.speechSynthesis) { try { speechSynthesis.cancel(); } catch {} }
+    if (r.restore) r.restore();
+    if (r.btn) { r.btn.classList.remove('reading'); r.btn.textContent = r.btnLabel; }
+  }
+
+  function pickVoice() {
+    if (!window.speechSynthesis) return null;
+    const vs = speechSynthesis.getVoices();
+    let best = null;
+    for (const v of vs) {
+      if (!/^en/i.test(v.lang)) continue;
+      if (/Google US English|Samantha|Zira|Aria/i.test(v.name)) return v;
+      if (!best) best = v;
+    }
+    return best;
+  }
+  if (window.speechSynthesis) speechSynthesis.getVoices(); // warm the voice list
+
+  // Browser voice with word-by-word highlighting inside el (when given).
+  function speakText(text, el, onDone) {
+    if (!window.speechSynthesis) {
+      setStatus('This device has no reading voice — sorry!', 'error');
+      if (onDone) onDone();
+      return null;
+    }
+    let restore = null;
+    let spans = null;
+    let offsets = null;
+    if (el) {
+      const orig = el.textContent;
+      const parts = text.split(/(\\s+)/);
+      el.textContent = '';
+      spans = []; offsets = [];
+      let pos = 0;
+      for (const part of parts) {
+        if (part === '') { continue; }
+        if (/^\\s+$/.test(part)) {
+          el.appendChild(document.createTextNode(part));
+        } else {
+          const s = document.createElement('span');
+          s.className = 'w';
+          s.textContent = part;
+          el.appendChild(s);
+          spans.push(s);
+          offsets.push(pos);
+        }
+        pos += part.length;
+      }
+      restore = () => { el.textContent = orig; };
+    }
+    const u = new SpeechSynthesisUtterance(text);
+    const v = pickVoice();
+    if (v) u.voice = v;
+    u.rate = 0.95;
+    u.pitch = 1.05;
+    u.onboundary = (e) => {
+      if (!spans) return;
+      let idx = -1;
+      for (let i = 0; i < offsets.length; i++) { if (offsets[i] <= e.charIndex) idx = i; else break; }
+      for (let j = 0; j < spans.length; j++) spans[j].classList.toggle('said', j === idx);
+    };
+    const done = () => { if (restore) restore(); if (onDone) onDone(); };
+    u.onend = done;
+    u.onerror = done;
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+    return { utter: u, restore: restore };
+  }
+
+  function playAudio(narration, onDone) {
+    const audio = new Audio('data:' + narration.mimeType + ';base64,' + narration.dataBase64);
+    audio.onended = () => { if (onDone) onDone(); };
+    audio.onerror = () => { if (onDone) onDone(); };
+    audio.play().catch(() => { if (onDone) onDone(); });
+    return audio;
+  }
+
+  // Read one page: cached audio -> server narration -> browser voice.
+  async function narratePage(pageIndex, page, el, btn, btnLabel, onDone) {
+    if (page.narration) {
+      reading = { btn: btn, btnLabel: btnLabel, audio: playAudio(page.narration, onDone) };
+      return;
+    }
+    try {
+      const res = await fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/narration', {
+        method: 'POST',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        page.narration = data.narration; // cache client-side too
+        reading = { btn: btn, btnLabel: btnLabel, audio: playAudio(data.narration, onDone) };
+        return;
+      }
+    } catch {}
+    // No narrator service — the browser reads it (with word highlighting).
+    const r = speakText(page.text, el, onDone);
+    if (r) reading = { btn: btn, btnLabel: btnLabel, utter: r.utter, restore: r.restore };
+  }
+
+  /** The "🔊 Read to me" row for a page. el = the text element to highlight. */
+  function readRow(pageIndex, page, el) {
+    const row = document.createElement('div');
+    row.className = 'readrow';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'readbtn';
+    const label = '🔊 Read to me';
+    btn.textContent = label;
+    row.appendChild(btn);
+    curReadBtn = btn;
+    curReadStart = () => start();
+    function start() {
+      haltPlayback();
+      btn.classList.add('reading');
+      btn.textContent = '⏹ Stop reading';
+      narratePage(pageIndex, page, el, btn, label, () => {
+        if (reading && reading.btn === btn) haltPlayback();
+        if (readAllMode) advanceReadAll();
+      });
+    }
+    btn.addEventListener('click', () => {
+      if (reading && reading.btn === btn) { stopReading(); return; }
+      readAllMode = false; // a single-page read cancels any read-all run
+      start();
+    });
+    return row;
+  }
+
+  // After a page finishes in read-all: flip forward and read the next spread.
+  function advanceReadAll() {
+    if (!readAllMode || !book) return;
+    const lastPageSpread = book.pages.length + 1;
+    if (spread >= lastPageSpread) { readAllMode = false; return; }
+    advancing = true;
+    spread++;
+    render();
+    advancing = false;
+    if (spread === 1) { advanceReadAll(); return; } // skip the title page
+    if (curReadStart) curReadStart();
+    else advanceReadAll(); // nothing readable here — keep going
+  }
+
+  /** Cover button: read the whole book, flipping pages automatically. */
+  function readAllControls() {
+    const row = document.createElement('div');
+    row.className = 'readrow';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'readbtn';
+    const label = '🔊 Read this book to me';
+    btn.textContent = label;
+    row.appendChild(btn);
+    btn.addEventListener('click', () => {
+      if (reading && reading.btn === btn) { stopReading(); return; }
+      haltPlayback();
+      if (!book.pages.length) { setStatus('This book has no pages to read yet!', 'blocked'); return; }
+      readAllMode = true;
+      btn.classList.add('reading');
+      btn.textContent = '⏹ Stop reading';
+      const by = authorsLine(book.authors);
+      const intro = book.title + (by ? '. Written by ' + by + '.' : '.');
+      const r = speakText(intro, null, () => {
+        if (reading && reading.btn === btn) haltPlayback();
+        if (readAllMode) advanceReadAll();
+      });
+      if (r) reading = { btn: btn, btnLabel: label, utter: r.utter, restore: r.restore };
+      else readAllMode = false;
+    });
+    return row;
+  }
+
   function render() {
+    if (!advancing) stopReading();
+    curReadBtn = null;
+    curReadStart = null;
     const n = book.pages.length;
     left.innerHTML = '';
     right.innerHTML = '';
@@ -828,6 +1032,7 @@ function readerClientJs(): string {
         fb.appendChild(h);
         right.appendChild(fb);
       }
+      right.appendChild(readAllControls());
       if (editable()) right.appendChild(coverRegenControls());
     } else if (spread === 1) {
       renderTitlePage();
@@ -843,6 +1048,7 @@ function readerClientJs(): string {
         art.className = 'the-end-art';
         art.textContent = '✨🎉✨';
         right.appendChild(art);
+        left.appendChild(readRow(spread - 2, p, h));
         if (editable()) left.appendChild(endPageControls());
         return;
       }
@@ -855,6 +1061,7 @@ function readerClientJs(): string {
       num.className = 'pagenum';
       num.textContent = String(spread - 1);
       left.appendChild(num);
+      left.appendChild(readRow(spread - 2, p, t));
       if (editable()) left.appendChild(wordsEditControls(spread - 2, p, t));
       if (p.image) {
         const picWrap = document.createElement('div');
