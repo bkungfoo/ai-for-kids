@@ -28,6 +28,7 @@ import {
 } from '../books/store.js';
 import { config } from '../config.js';
 import { elevenLabsProvider } from '../providers/elevenlabs.js';
+import { geminiTtsProvider } from '../providers/geminiTts.js';
 import {
   draftSprinkleProvider,
   fairyDustProvider,
@@ -530,19 +531,28 @@ booksApiRouter.post(
       return;
     }
 
-    // 501 when ElevenLabs isn't configured — the reader then falls back to the
-    // browser's built-in speech synthesis.
-    const voiceId = config.providers.elevenlabs.narratorVoiceId;
-    const outcome = await runGuardedGeneration(elevenLabsProvider, { text: page.text, voiceId });
+    // Narrator engine: ElevenLabs when its key is set, else Gemini TTS on the
+    // AI Studio key. 501 only when neither is configured — the reader then
+    // falls back to the browser's built-in speech synthesis.
+    const outcome = elevenLabsProvider.isConfigured()
+      ? await runGuardedGeneration(elevenLabsProvider, {
+          text: page.text,
+          voiceId: config.providers.elevenlabs.narratorVoiceId,
+        })
+      : await runGuardedGeneration(geminiTtsProvider, { text: page.text });
     if (outcome.status !== 200) {
       res.status(outcome.status).json(outcome.body);
       return;
     }
-    const result = outcome.body.result as { contentType: string; audioBase64: string };
+    const result = outcome.body.result as {
+      contentType: string;
+      audioBase64: string;
+      voiceId: string;
+    };
     const narration = {
       mimeType: result.contentType,
       dataBase64: result.audioBase64,
-      voiceId,
+      voiceId: result.voiceId,
     };
     await updatePage(bookId, index, { narration });
     res.json({ ok: true, narration, pageIndex: index });

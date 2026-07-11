@@ -195,6 +195,13 @@ export const config = {
     fairyDust: {
       model: str('FAIRY_DUST_MODEL', 'gemini-3.1-flash-lite'),
     },
+    // Storybook narrator on Gemini TTS (same AI Studio key) — used when
+    // ElevenLabs isn't configured. Kid-friendly prebuilt voices include
+    // Leda (youthful), Aoede (breezy), Zephyr (bright), Kore (firm).
+    geminiTts: {
+      model: str('GEMINI_TTS_MODEL', 'gemini-3.1-flash-tts-preview'),
+      voice: str('GEMINI_TTS_VOICE', 'Leda'),
+    },
   },
 } as const;
 

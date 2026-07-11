@@ -4,6 +4,7 @@ import { requireApiAuth } from '../middleware/requireAuth.js';
 import { claudeCodeProvider } from '../providers/claudeCode.js';
 import { elevenLabsProvider } from '../providers/elevenlabs.js';
 import { geminiProvider } from '../providers/gemini.js';
+import { geminiTtsProvider } from '../providers/geminiTts.js';
 import { replicateProvider } from '../providers/replicate.js';
 import { storyImageProvider } from '../providers/imageProvider.js';
 import { sunoProvider } from '../providers/suno.js';
@@ -31,6 +32,7 @@ router.get('/health', (_req: Request, res: Response) => {
       gemini: geminiProvider.isConfigured(),
       replicate: replicateProvider.isConfigured(),
       claudeCode: claudeCodeProvider.isConfigured(),
+      geminiTts: geminiTtsProvider.isConfigured(),
     },
   });
 });
