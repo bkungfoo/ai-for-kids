@@ -148,7 +148,9 @@ library books too — derived audio of already-moderated words, not an edit.
 With neither engine configured the reader falls back to the browser's built-in
 speech synthesis, which also highlights each word as it is spoken.
 
-**Fairy dust.** In edit mode a 🪄 button on the writing page has a rainbow wand
+**Fairy dust.** Inside an open words editor (the new-page form, or "Edit
+text" on a saved page — which opens the same editor prefilled with the page's
+words) a 🪄 button has a rainbow wand
 sweep across the text in a trail of sparkly dust; when the dust vanishes the
 child's words reappear with perfect grammar, flowing smoothly with the rest of
 the story, in elementary-age language (Google Gemini via `GEMINI_API_KEY`;
@@ -156,13 +158,10 @@ the story, in elementary-age language (Google Gemini via `GEMINI_API_KEY`;
 the words are moderated in, the rewrite is moderated out). The child's own
 words are kept intact as a background state (`page.sourceText`), so every
 sprinkle re-polishes the *original* and can land on a different fix. If the
-child then hand-edits the words, that edit becomes the new background state and
-future sprinkles polish it instead. Sprinkling clears the page's cached
-narration (the words changed).
-
-Fairy dust also works on the **new-page form** before the page is made
-(`POST /v1/books/:id/sprinkle-draft`): it polishes the draft words with the
-same background-state rules, kept on the client draft.
+child then types, the typed words become the new background state and future
+sprinkles polish those instead. Nothing persists until the editor's own
+save/paint action (`POST /v1/books/:id/sprinkle-draft`, with `editIndex` when
+editing a saved page so its stored words are excluded from the context).
 
 **Ask Fairy Godmother.** Beside the sprinkle button (on the new-page form and
 inside "Edit text"), a 🧚 button (`POST /v1/books/:id/godmother`) sends the

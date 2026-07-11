@@ -104,12 +104,14 @@ export const fairyDustProvider: Provider<SprinkleRequest> = {
   },
 };
 
-// --- Draft sprinkle: polish unsaved new-page words (form textarea) --------------
+// --- Draft sprinkle: polish the words in an open editor (nothing stored) --------
 
 export interface DraftSprinkleRequest {
   book: Book;
-  /** The draft words in the new-page form. Moderated on input. */
+  /** The live words in the editor. Moderated on input. */
   text: string;
+  /** When editing a saved page: exclude its stored text from the context. */
+  excludeIndex?: number;
 }
 
 export const draftSprinkleProvider: Provider<DraftSprinkleRequest> = {
@@ -128,8 +130,8 @@ export const draftSprinkleProvider: Provider<DraftSprinkleRequest> = {
     if (!apiKey) throw new ProviderNotConfiguredError('fairy dust');
 
     const user =
-      `Here is the story so far:\n\n${storyWithPictures(req.book)}\n\n` +
-      `The child's words for the NEW page being written:\n"""${req.text}"""\n\n` +
+      `Here is the story so far:\n\n${storyWithPictures(req.book, req.excludeIndex)}\n\n` +
+      `The child's words for the page being written:\n"""${req.text}"""\n\n` +
       'Polish them now.';
 
     const raw = await callGemini(apiKey, baseUrl, EDITOR_PERSONA, user, SPRINKLE_SCHEMA);
@@ -178,12 +180,13 @@ const ILLUSTRATOR_PERSONA =
 /**
  * The story with its VISUAL details (cover description + earlier picture
  * prompts), so the crafted image prompt keeps characters looking consistent.
+ * `excludeIndex` drops a page whose words are being rewritten live.
  */
-function storyWithPictures(book: Book, maxChars = 4500): string {
+function storyWithPictures(book: Book, excludeIndex?: number, maxChars = 4500): string {
   const lines: string[] = [`Story title: "${book.title}"`];
   if (book.coverPrompt) lines.push(`Cover picture: ${book.coverPrompt}`);
   for (const [i, p] of book.pages.entries()) {
-    if (p.isEnd) continue;
+    if (p.isEnd || i === excludeIndex) continue;
     lines.push(`Page ${i + 1}: ${p.text}`);
     if (p.imagePrompt) lines.push(`Page ${i + 1} picture: ${p.imagePrompt}`);
   }

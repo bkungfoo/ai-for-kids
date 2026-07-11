@@ -728,7 +728,7 @@ booksApiRouter.post(
   }),
 );
 
-// --- Fairy dust on the NEW-page form (draft words, nothing stored yet) ----------
+// --- Fairy dust on an open words editor (new page OR edit-text; not stored) -----
 booksApiRouter.post(
   '/:id/sprinkle-draft',
   asyncHandler(async (req, res) => {
@@ -742,7 +742,19 @@ booksApiRouter.post(
     }
     if (book.status === 'published') return publishedConflict(res);
 
-    const outcome = await runGuardedGeneration(draftSprinkleProvider, { book, text });
+    // When an existing page is being edited, its stored words are excluded from
+    // the story context (the live editor text replaces them).
+    const editIndex = Number((req.body as { editIndex?: unknown }).editIndex);
+    const excludeIndex =
+      Number.isInteger(editIndex) && editIndex >= 0 && book.pages[editIndex]
+        ? editIndex
+        : undefined;
+
+    const outcome = await runGuardedGeneration(draftSprinkleProvider, {
+      book,
+      text,
+      ...(excludeIndex !== undefined ? { excludeIndex } : {}),
+    });
     res.status(outcome.status).json(outcome.body);
   }),
 );
