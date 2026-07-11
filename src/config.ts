@@ -174,6 +174,12 @@ export const config = {
       // Uses the top-level Anthropic API key.
       model: str('CLAUDE_CODE_MODEL', 'claude-opus-4-8'),
     },
+    // Storybook "fairy dust": rewrites a page's words with perfect grammar and
+    // smooth story flow, in elementary-age language. Runs on Google Gemini via
+    // the same AI Studio key as image generation (GEMINI_API_KEY).
+    fairyDust: {
+      model: str('FAIRY_DUST_MODEL', 'gemini-3.1-flash-lite'),
+    },
   },
 } as const;
 

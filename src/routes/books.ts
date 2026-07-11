@@ -28,6 +28,7 @@ import {
 } from '../books/store.js';
 import { config } from '../config.js';
 import { elevenLabsProvider } from '../providers/elevenlabs.js';
+import { fairyDustProvider } from '../providers/fairyDust.js';
 import { optionalString, requireString, ValidationError } from './validate.js';
 
 /**
@@ -449,8 +450,14 @@ booksApiRouter.patch(
       return;
     }
 
-    // New words invalidate any cached read-aloud audio for the page.
-    const updated = await updatePage(bookId, index, { text, narration: null });
+    // New words invalidate any cached read-aloud audio for the page — and
+    // become the new fairy-dust background state (sourceText is cleared, so
+    // future sprinkles polish THIS text, not the pre-sprinkle original).
+    const updated = await updatePage(bookId, index, {
+      text,
+      narration: null,
+      sourceText: undefined,
+    });
     if (!updated) {
       res.status(404).json({ ok: false, error: 'Page not found' });
       return;
@@ -535,6 +542,51 @@ booksApiRouter.post(
     };
     await updatePage(bookId, index, { narration });
     res.json({ ok: true, narration, pageIndex: index });
+  }),
+);
+
+// --- Fairy dust: polish a page's words (grammar + flow, kid-readable) -----------
+booksApiRouter.post(
+  '/:id/pages/:index/sprinkle',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const index = Number.parseInt(req.params.index ?? '', 10);
+
+    const book = await getOwnedBook(bookId, currentUser(req));
+    const page = Number.isInteger(index) && index >= 0 ? book?.pages[index] : undefined;
+    if (!book || !page) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+    if (page.isEnd || !page.text.trim()) {
+      res.status(409).json({ ok: false, error: 'This page has no words to sprinkle' });
+      return;
+    }
+
+    // Always polish the child's ORIGINAL words (the background state), so
+    // sprinkling again gives a fresh fix of the original — not a fix of a fix.
+    const sourceText = page.sourceText ?? page.text;
+    const outcome = await runGuardedGeneration(fairyDustProvider, {
+      book,
+      pageIndex: index,
+      sourceText,
+    });
+    if (outcome.status !== 200) {
+      res.status(outcome.status).json(outcome.body);
+      return;
+    }
+    const polished = (outcome.body.result as { text: string }).text;
+    const updated = await updatePage(bookId, index, {
+      text: polished,
+      sourceText,
+      narration: null, // the words changed — stale read-aloud audio goes
+    });
+    if (!updated) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    res.json({ ok: true, book: updated, pageIndex: index });
   }),
 );
 

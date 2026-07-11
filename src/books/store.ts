@@ -17,6 +17,13 @@ export interface BookImage {
 export interface BookPage {
   /** The story text shown on the left-hand page. */
   text: string;
+  /**
+   * The child's own words, kept intact while `text` holds a fairy-dust (AI
+   * grammar/flow) rewrite. Every sprinkle regenerates from THIS, so sprinkling
+   * again gives a fresh fix of the original. Cleared when the child manually
+   * edits the words — their edit becomes the new background state.
+   */
+  sourceText?: string;
   /** The prompt the child used for the illustration (kept for regeneration). */
   imagePrompt: string;
   /** The illustration shown on the right-hand page. */

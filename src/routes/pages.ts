@@ -724,6 +724,47 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .w.said { background: #ffe9a8; border-radius: 4px; }
         /* On the closed cover the read button sits on a paper strip below the art */
         .book.closed .page-right .readrow { padding: 12px 16px 4px; position: relative; z-index: 2; }
+        /* Fairy dust */
+        .page { position: relative; }
+        .dust-overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden;
+          z-index: 5; opacity: 1; transition: opacity .6s; }
+        .dust-overlay.fading { opacity: 0; }
+        .wand { position: absolute; font-size: 36px; z-index: 6; left: -12%; top: 12%;
+          filter: drop-shadow(0 0 8px rgba(255,255,255,.95));
+          animation: wandsweep 1.7s ease-in-out forwards; }
+        @keyframes wandsweep {
+          0%   { left: -12%; top: 10%; transform: rotate(-35deg); }
+          30%  { left: 22%;  top: 30%; transform: rotate(10deg); }
+          55%  { left: 52%;  top: 10%; transform: rotate(-15deg); }
+          80%  { left: 78%;  top: 32%; transform: rotate(12deg); }
+          100% { left: 100%; top: 16%; transform: rotate(-25deg); }
+        }
+        .wandtrail { position: absolute; left: 4%; right: 4%; top: 26%; height: 7px;
+          border-radius: 999px; filter: blur(2px); opacity: 0; transform-origin: left center;
+          background: linear-gradient(90deg,#e23b3b,#f39a12,#f7d21a,#3aa657,#2c6e8f,#7a5aa0);
+          animation: trailgrow 1.7s ease-in-out forwards, trailfade 1.4s ease .9s forwards; }
+        @keyframes trailgrow { from { transform: scaleX(0); opacity: .85; } to { transform: scaleX(1); opacity: .85; } }
+        @keyframes trailfade { to { opacity: 0; } }
+        .dust { position: absolute; font-size: 14px; opacity: 0;
+          animation: twinkle var(--d, 1.6s) ease-in-out var(--dl, 0s) infinite;
+          text-shadow: 0 0 6px currentColor; }
+        @keyframes twinkle {
+          0%   { opacity: 0; transform: scale(.3) rotate(0deg); }
+          30%  { opacity: 1; transform: scale(1.2) rotate(25deg); }
+          65%  { opacity: .75; transform: scale(.9) rotate(-10deg) translateY(3px); }
+          100% { opacity: 0; transform: scale(.25) rotate(10deg) translateY(10px); }
+        }
+        .story-text.revealed, .page textarea.revealed { animation: dustreveal 1s ease; }
+        @keyframes dustreveal {
+          from { opacity: 0; text-shadow: 0 0 16px rgba(255,215,90,.95); }
+          to   { opacity: 1; text-shadow: none; }
+        }
+        .sprinkle-note { font-size: 11.5px; color: #8a7d63; text-align: center;
+          margin-top: 2px; font-style: italic; }
+        .readbtn.sprinkle { background: linear-gradient(90deg,#fde8e8,#fdf3e0,#fdfae0,#e8f6ec,#e6f0f6,#efe8f6);
+          border-color: #c9a9e0; }
+        .readbtn.sprinkle:hover { filter: brightness(.97); }
+        .readbtn.sprinkle:disabled { opacity: .55; cursor: progress; }
         /* Page tools (edit mode) */
         .pagetools { display: flex; flex-wrap: wrap; gap: 4px 10px; justify-content: center;
           margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e0d6bd; }
@@ -1016,6 +1057,120 @@ function readerClientJs(): string {
     return row;
   }
 
+  // ===== Fairy dust ==========================================================
+  // A rainbow wand sweeps the writing page, sparkly dust twinkles while the AI
+  // polishes the words (grammar + flow, kid-readable), the dust vanishes and
+  // the new text shimmers in. The child's ORIGINAL words are kept on the page
+  // (sourceText) so sprinkling again re-polishes the original — until they
+  // hand-edit the words, which becomes the new original.
+  let sprinkling = false;
+  let justSprinkled = false; // the next render shimmers the story text in
+
+  const DUST_COLORS = ['#e23b3b', '#f39a12', '#d9b514', '#3aa657', '#2c6e8f', '#7a5aa0'];
+  const DUST_CHARS = ['✦', '✧', '✨', '⭐', '✶'];
+
+  function startDust(container) {
+    const ov = document.createElement('div');
+    ov.className = 'dust-overlay';
+    const trail = document.createElement('div');
+    trail.className = 'wandtrail';
+    ov.appendChild(trail);
+    const wand = document.createElement('span');
+    wand.className = 'wand';
+    wand.textContent = '🪄';
+    ov.appendChild(wand);
+    container.appendChild(ov);
+
+    function spawn(count) {
+      for (let i = 0; i < count; i++) {
+        const s = document.createElement('span');
+        s.className = 'dust';
+        s.textContent = DUST_CHARS[Math.floor(Math.random() * DUST_CHARS.length)];
+        s.style.left = (3 + Math.random() * 92) + '%';
+        s.style.top = (4 + Math.random() * 84) + '%';
+        s.style.color = DUST_COLORS[Math.floor(Math.random() * DUST_COLORS.length)];
+        s.style.setProperty('--d', (1.1 + Math.random() * 1.2).toFixed(2) + 's');
+        s.style.setProperty('--dl', (Math.random() * 0.8).toFixed(2) + 's');
+        ov.appendChild(s);
+        setTimeout(() => s.remove(), 3200);
+      }
+    }
+    spawn(28);
+    // Keep the dust twinkling while the fairies work (i.e. while we wait).
+    const iv = setInterval(() => spawn(9), 650);
+
+    return {
+      finish(cb) {
+        clearInterval(iv);
+        ov.classList.add('fading');
+        setTimeout(() => { ov.remove(); if (cb) cb(); }, 650);
+      },
+    };
+  }
+
+  async function doSprinkle(pageIndex, btn) {
+    if (sprinkling) return;
+    sprinkling = true;
+    stopReading();
+    btn.disabled = true;
+    const dust = startDust(left);
+    setStatus('🪄 Sprinkling fairy dust on your words…');
+    const started = Date.now();
+
+    function settle(apply) {
+      // Let the wand finish its sweep before the dust can vanish.
+      const wait = Math.max(0, 1900 - (Date.now() - started));
+      setTimeout(() => { dust.finish(apply); sprinkling = false; }, wait);
+    }
+
+    try {
+      const res = await fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/sprinkle', {
+        method: 'POST',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        settle(() => {
+          book = data.book;
+          justSprinkled = true;
+          setStatus('✨ Ta-da! Sprinkle again for a different fix — or change the words to make them yours.');
+          render();
+        });
+      } else {
+        settle(() => {
+          const f = friendlyError(res, data);
+          setStatus(f.text, f.cls);
+          render();
+        });
+      }
+    } catch {
+      settle(() => {
+        setStatus('Could not reach the server. Check your connection and try again.', 'error');
+        render();
+      });
+    }
+  }
+
+  /** The "🪄 Sprinkle fairy dust" row on a writing page (edit mode). */
+  function sprinkleControls(pageIndex, page) {
+    const wrap = document.createElement('div');
+    wrap.className = 'readrow';
+    wrap.style.flexDirection = 'column';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'readbtn sprinkle';
+    btn.textContent = '🪄 Sprinkle fairy dust';
+    btn.title = 'Magically fix the grammar and make the words flow';
+    btn.addEventListener('click', () => doSprinkle(pageIndex, btn));
+    wrap.appendChild(btn);
+    if (page.sourceText) {
+      const note = document.createElement('div');
+      note.className = 'sprinkle-note';
+      note.textContent = '✨ Your own words are kept safe — every sprinkle polishes them fresh.';
+      wrap.appendChild(note);
+    }
+    return wrap;
+  }
+
   function render() {
     if (!advancing) stopReading();
     curReadBtn = null;
@@ -1069,12 +1224,14 @@ function readerClientJs(): string {
       const t = document.createElement('div');
       t.className = 'story-text';
       t.textContent = p.text;
+      if (justSprinkled) { t.classList.add('revealed'); justSprinkled = false; }
       left.appendChild(t);
       const num = document.createElement('div');
       num.className = 'pagenum';
       num.textContent = String(spread - 1);
       left.appendChild(num);
       left.appendChild(readRow(spread - 2, p, t));
+      if (editable()) left.appendChild(sprinkleControls(spread - 2, p));
       if (editable()) left.appendChild(wordsEditControls(spread - 2, p, t));
       if (editable()) left.appendChild(pageToolsControls(spread - 2));
       if (p.image) {
