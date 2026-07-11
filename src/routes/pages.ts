@@ -776,6 +776,31 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .page textarea.prompt { flex: 0 0 auto; min-height: 108px; font-size: 14.5px;
           line-height: 1.5; font-family: inherit; background: transparent;
           border: 1px dashed #cbbfa4; }
+        /* Fairy Godmother */
+        .readbtn.godmother-btn { background: #f6e8fb; border-color: #c9a9e0; }
+        .readbtn.godmother-btn:disabled { opacity: .55; cursor: progress; }
+        .godmother { position: absolute; font-size: 34px; z-index: 6;
+          filter: drop-shadow(0 0 8px rgba(255,214,110,.95));
+          transition: left .55s ease-in-out, top .55s ease-in-out; }
+        .gm-suggest { flex: 0 0 auto; margin-top: 10px; border: 1px solid #d9c37a;
+          background: #fdf9f0; border-radius: 10px; padding: 10px 12px; }
+        .gm-title { font-size: 12.5px; font-weight: 800; color: #8a5a00; }
+        .gm-opt { display: block; width: 100%; text-align: left; margin-top: 7px;
+          padding: 8px 11px; border: 1px solid #cbbfa4; border-radius: 8px; background: #fff;
+          cursor: pointer; font-family: Georgia, 'Times New Roman', serif; font-size: 14.5px;
+          line-height: 1.45; color: #3d2f1e; }
+        .gm-opt:hover { background: #f6e8fb; border-color: #a06bc9; }
+        /* Accepted sentence: rainbow sparkle text that solidifies into ink */
+        .magic-overlay { position: relative; flex: 1; min-height: 220px;
+          font-family: Georgia, 'Times New Roman', serif; font-size: 17px; line-height: 1.6;
+          white-space: pre-wrap; word-break: break-word; padding: 3px; }
+        .magic-new { background: linear-gradient(90deg,#e23b3b,#f39a12,#d9b514,#3aa657,#2c6e8f,#7a5aa0,#e23b3b);
+          background-size: 300% 100%; -webkit-background-clip: text; background-clip: text;
+          color: transparent; animation: gmshimmer 1.5s linear infinite;
+          filter: drop-shadow(0 0 6px rgba(255,214,110,.6)); }
+        @keyframes gmshimmer { from { background-position: 0% 0; } to { background-position: 300% 0; } }
+        .magic-done { color: inherit; background: none; filter: none;
+          transition: color .5s ease; }
         .words-edit { text-align: center; }
         .page input.revealed { animation: dustreveal 1s ease; }
         /* Page tools (edit mode) */
@@ -1082,16 +1107,18 @@ function readerClientJs(): string {
   const DUST_COLORS = ['#e23b3b', '#f39a12', '#d9b514', '#3aa657', '#2c6e8f', '#7a5aa0'];
   const DUST_CHARS = ['✦', '✧', '✨', '⭐', '✶'];
 
-  function startDust(container) {
+  function startDust(container, opts) {
     const ov = document.createElement('div');
     ov.className = 'dust-overlay';
-    const trail = document.createElement('div');
-    trail.className = 'wandtrail';
-    ov.appendChild(trail);
-    const wand = document.createElement('span');
-    wand.className = 'wand';
-    wand.textContent = '🪄';
-    ov.appendChild(wand);
+    if (!opts || opts.wand !== false) {
+      const trail = document.createElement('div');
+      trail.className = 'wandtrail';
+      ov.appendChild(trail);
+      const wand = document.createElement('span');
+      wand.className = 'wand';
+      wand.textContent = '🪄';
+      ov.appendChild(wand);
+    }
     container.appendChild(ov);
 
     function spawn(count) {
@@ -1208,6 +1235,157 @@ function readerClientJs(): string {
     } catch {
       settle(() => setStatus('Could not reach the server. Check your connection and try again.', 'error'));
     }
+  }
+
+  // ===== Fairy Godmother =====================================================
+  // She flies out of her button, sprinkles dust (polishing whatever the child
+  // has written), then offers 3 sentences the story could continue with. One
+  // click accepts a sentence (it solidifies from rainbow sparkles into ink);
+  // cancel rejects all three. She can always be asked again.
+
+  function flyGodmother(btn, container) {
+    const c = container.getBoundingClientRect();
+    const b = btn.getBoundingClientRect();
+    const fairy = document.createElement('span');
+    fairy.className = 'godmother';
+    fairy.textContent = '🧚';
+    fairy.style.left = (b.left - c.left + b.width / 2 - 17) + 'px';
+    fairy.style.top = (b.top - c.top - 12) + 'px';
+    container.appendChild(fairy);
+    const W = Math.max(c.width, 300);
+    const spots = [[W * 0.15, 46], [W * 0.6, 100], [W * 0.3, 180], [W * 0.75, 70]];
+    let k = 0;
+    const hop = () => {
+      fairy.style.left = spots[k % spots.length][0] + 'px';
+      fairy.style.top = spots[k % spots.length][1] + 'px';
+      k++;
+    };
+    setTimeout(hop, 30); // first hop right away
+    const iv = setInterval(hop, 620);
+    return { remove() { clearInterval(iv); fairy.remove(); } };
+  }
+
+  /**
+   * Ask the Fairy Godmother. ta = the textarea being written; position is
+   * either {editIndex} (editing a saved page) or {insertAt} (new page).
+   * onPolished(prev, text) / onChanged(fullText) let the new-page form keep
+   * its draft (and fairy-dust background state) in sync.
+   */
+  async function askGodmother(btn, ta, position, container, hooks) {
+    if (sprinkling) return;
+    sprinkling = true;
+    stopReading();
+    btn.disabled = true;
+    const prev = ta.value.trim();
+    const dust = startDust(container, { wand: false });
+    const fairy = flyGodmother(btn, container);
+    setStatus('🧚 The Fairy Godmother is on her way…');
+    const started = Date.now();
+
+    function settle(apply) {
+      const wait = Math.max(0, 2100 - (Date.now() - started));
+      setTimeout(() => {
+        fairy.remove();
+        dust.finish(apply);
+        sprinkling = false;
+        btn.disabled = false;
+      }, wait);
+    }
+
+    try {
+      const body = { text: prev };
+      if (position.editIndex !== undefined) body.editIndex = position.editIndex;
+      else body.insertAt = position.insertAt;
+      const res = await fetch('/v1/books/' + bookId + '/godmother', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        settle(() => {
+          const r = data.result;
+          if (prev && r.text) {
+            ta.value = r.text;
+            if (hooks && hooks.onPolished) hooks.onPolished(prev, r.text);
+            ta.classList.add('revealed');
+            setTimeout(() => ta.classList.remove('revealed'), 1100);
+          }
+          showGmSuggestions(ta, r.suggestions || [], hooks);
+          setStatus('🧚 Pick a sentence you like — or say “no thanks”!');
+        });
+      } else {
+        settle(() => {
+          const f = friendlyError(res, data);
+          setStatus(f.text, f.cls);
+        });
+      }
+    } catch {
+      settle(() => setStatus('Could not reach the server. Check your connection and try again.', 'error'));
+    }
+  }
+
+  function showGmSuggestions(ta, suggestions, hooks) {
+    const old = document.getElementById('gm-suggest');
+    if (old) old.remove();
+    if (!suggestions.length) { setStatus('🧚 She is out of ideas right now — try again!', 'blocked'); return; }
+    const panel = document.createElement('div');
+    panel.id = 'gm-suggest';
+    panel.className = 'gm-suggest';
+    const title = document.createElement('div');
+    title.className = 'gm-title';
+    title.textContent = '🧚 How could the story keep going?';
+    panel.appendChild(title);
+    for (const s of suggestions) {
+      const opt = document.createElement('button');
+      opt.type = 'button';
+      opt.className = 'gm-opt';
+      opt.textContent = s;
+      opt.addEventListener('click', () => {
+        panel.remove();
+        acceptSentence(ta, s, hooks);
+      });
+      panel.appendChild(opt);
+    }
+    const no = document.createElement('button');
+    no.type = 'button';
+    no.className = 'linkbtn gm-cancel';
+    no.textContent = '✕ No thanks';
+    no.addEventListener('click', () => { panel.remove(); setStatus(''); });
+    panel.appendChild(no);
+    ta.parentNode.insertBefore(panel, ta.nextSibling);
+  }
+
+  function acceptSentence(ta, sentence, hooks) {
+    const existing = ta.value.replace(/\s+$/, '');
+    const sep = existing ? ' ' : '';
+    const full = existing + sep + sentence;
+    ta.value = full;
+    if (hooks && hooks.onChanged) hooks.onChanged(full);
+    // The accepted sentence fades in as rainbow sparkle-text, then solidifies.
+    const ov = document.createElement('div');
+    ov.className = 'magic-overlay';
+    ov.appendChild(document.createTextNode(existing + sep));
+    const span = document.createElement('span');
+    span.className = 'magic-new';
+    span.textContent = sentence;
+    ov.appendChild(span);
+    for (let i = 0; i < 10; i++) {
+      const d = document.createElement('span');
+      d.className = 'dust';
+      d.textContent = DUST_CHARS[Math.floor(Math.random() * DUST_CHARS.length)];
+      d.style.left = (10 + Math.random() * 80) + '%';
+      d.style.top = (10 + Math.random() * 80) + '%';
+      d.style.color = DUST_COLORS[Math.floor(Math.random() * DUST_COLORS.length)];
+      d.style.setProperty('--d', (1 + Math.random()).toFixed(2) + 's');
+      d.style.setProperty('--dl', (Math.random() * 0.5).toFixed(2) + 's');
+      ov.appendChild(d);
+    }
+    ta.style.display = 'none';
+    ta.parentNode.insertBefore(ov, ta);
+    setTimeout(() => { span.className = 'magic-done'; }, 1500);
+    setTimeout(() => { ov.remove(); ta.style.display = ''; ta.focus(); }, 2200);
+    setStatus('✨ Lovely choice! Keep writing — or ask her again.');
   }
 
   /** The "🪄 Sprinkle fairy dust" row on a writing page (edit mode). */
@@ -1479,11 +1657,23 @@ function readerClientJs(): string {
       ta.maxLength = 2000;
       ta.required = true;
       ta.value = page.text;
+      // The Fairy Godmother helps here too: polish + next-sentence ideas,
+      // with the pages before AND after this one as her context.
+      const gmRow = document.createElement('div');
+      gmRow.className = 'readrow';
+      const gmBtn = document.createElement('button');
+      gmBtn.type = 'button';
+      gmBtn.className = 'readbtn godmother-btn';
+      gmBtn.textContent = '🧚 Ask Fairy Godmother';
+      gmBtn.title = 'She fixes your words and suggests what could happen next';
+      gmBtn.addEventListener('click', () =>
+        askGodmother(gmBtn, ta, { editIndex: pageIndex }, left, null));
+      gmRow.appendChild(gmBtn);
       const btn = document.createElement('button');
       btn.type = 'submit';
       btn.className = 'cta';
       btn.textContent = '✏️ Save the words';
-      form.appendChild(label); form.appendChild(ta); form.appendChild(btn);
+      form.appendChild(label); form.appendChild(ta); form.appendChild(gmRow); form.appendChild(btn);
       wrap.appendChild(form);
       ta.focus();
 
@@ -1991,6 +2181,26 @@ function readerClientJs(): string {
     dustBtn.title = 'Magically fix the grammar and make the words flow';
     dustBtn.addEventListener('click', () => doDraftSprinkle(dustBtn, storyEl));
     dustRow.appendChild(dustBtn);
+    // The Fairy Godmother: polish + three ways the story could continue.
+    const gmBtn = document.createElement('button');
+    gmBtn.type = 'button';
+    gmBtn.className = 'readbtn godmother-btn';
+    gmBtn.textContent = '🧚 Ask Fairy Godmother';
+    gmBtn.title = 'She fixes your words and suggests what could happen next';
+    gmBtn.addEventListener('click', () =>
+      askGodmother(gmBtn, storyEl, { insertAt: insertAt !== null ? insertAt : book.pages.length }, left, {
+        onPolished: (prev, polished) => {
+          if (!draft.sourceText) draft.sourceText = prev;
+          draft.text = polished;
+          saveDraft();
+        },
+        onChanged: (full) => {
+          draft.text = full;
+          delete draft.sourceText; // accepted words become the new background
+          saveDraft();
+        },
+      }));
+    dustRow.appendChild(gmBtn);
     // "The End" lives beside the sprinkle button (not offered mid-insert).
     if (!inserting) {
       const endBtn = document.createElement('button');

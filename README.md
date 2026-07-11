@@ -164,6 +164,16 @@ Fairy dust also works on the **new-page form** before the page is made
 (`POST /v1/books/:id/sprinkle-draft`): it polishes the draft words with the
 same background-state rules, kept on the client draft.
 
+**Ask Fairy Godmother.** Beside the sprinkle button (on the new-page form and
+inside "Edit text"), a 🧚 button (`POST /v1/books/:id/godmother`) sends the
+Fairy Godmother flying across the page in a trail of dust: she polishes
+whatever the child has written (same rules as fairy dust), then offers **three
+possible next sentences**, each taking the story a different direction. Her
+context runs both ways — pages before AND after the one being written — so
+mid-book suggestions bridge toward what already happens later. Clicking a
+sentence accepts it (it fades in as rainbow sparkle-text and solidifies into
+ink); "No thanks" rejects all three; she can always be asked again.
+
 **Suggest image prompt.** On the picture side of the new-page form, a 💡
 button (`POST /v1/books/:id/suggest-image-prompt`) translates the narrative on
 the left into a concrete **illustration instruction** — a "Draw …" scene with

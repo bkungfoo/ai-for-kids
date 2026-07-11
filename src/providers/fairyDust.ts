@@ -226,6 +226,102 @@ export const suggestPromptProvider: Provider<SuggestPromptRequest> = {
   },
 };
 
+// --- Fairy Godmother: polish + three ways the story could continue --------------
+
+export interface GodmotherRequest {
+  book: Book;
+  /** The child's words on the page so far — may be empty. Moderated on input. */
+  text: string;
+  /** Where the page sits: an index (editing) or index-0.5 (new page/insert). */
+  targetPos: number;
+  /** The page being edited (its stored text is replaced by `text`). */
+  excludeIndex?: number;
+}
+
+const GODMOTHER_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    text: { type: 'STRING' },
+    suggestions: { type: 'ARRAY', items: { type: 'STRING' } },
+  },
+  required: ['text', 'suggestions'],
+} as const;
+
+const GODMOTHER_PERSONA =
+  "You are the Fairy Godmother in a children's picture-book app (ages 5-12). A child is " +
+  'writing ONE page of their story and asked for your help. Return JSON with:\n' +
+  '1. "text" — if the child has already written words for this page, polish them: fix all ' +
+  'grammar, spelling and punctuation, smooth the flow with the surrounding pages, keep their ' +
+  "meaning, characters, events and voice EXACTLY (you polish, you never invent), elementary " +
+  'vocabulary, roughly the same length. If the child has written nothing, return "".\n' +
+  '2. "suggestions" — exactly 3 different single sentences that could come NEXT on this page, ' +
+  'continuing straight on from the child\'s words (or opening the page if they are empty). ' +
+  'Each suggestion should take the story a different direction — for example an action, a ' +
+  'feeling, or a small surprise. Keep each under 20 words, elementary vocabulary, gentle and ' +
+  'wholesome. They must fit the story: consistent with the earlier pages, and when LATER pages ' +
+  'exist, each suggestion must lead naturally toward what happens in them (never contradict ' +
+  'them). Do not repeat a sentence the story already has.';
+
+/** The story split around the page being written, so suggestions bridge both ways. */
+function storyAround(book: Book, targetPos: number, excludeIndex?: number): string {
+  const before: string[] = [];
+  const after: string[] = [];
+  for (const [i, p] of book.pages.entries()) {
+    if (p.isEnd || i === excludeIndex || !p.text.trim()) continue;
+    (i < targetPos ? before : after).push(`Page ${i + 1}: ${p.text}`);
+  }
+  const parts = [`Story title: "${book.title}"`];
+  parts.push(
+    before.length ? `Earlier pages:\n${before.join('\n')}` : 'This is the very first page.',
+  );
+  if (after.length) {
+    parts.push(
+      `Later pages (the page being written must connect toward these):\n${after.join('\n')}`,
+    );
+  }
+  let text = parts.join('\n\n');
+  if (text.length > 4500) text = `${text.slice(0, 4500)}…`;
+  return text;
+}
+
+export const godmotherProvider: Provider<GodmotherRequest> = {
+  name: 'fairy godmother',
+
+  isConfigured() {
+    return Boolean(config.providers.gemini.apiKey);
+  },
+
+  inputTexts(req) {
+    return [req.text];
+  },
+
+  async generate(req): Promise<GenerationResult> {
+    const { apiKey, baseUrl } = config.providers.gemini;
+    if (!apiKey) throw new ProviderNotConfiguredError('fairy godmother');
+
+    const user =
+      `${storyAround(req.book, req.targetPos, req.excludeIndex)}\n\n` +
+      `The child's words on the page being written so far:\n"""${req.text}"""\n\n` +
+      'Polish them (or return "" if empty), and offer your 3 suggestions for the next sentence.';
+
+    const raw = await callGemini(apiKey, baseUrl, GODMOTHER_PERSONA, user, GODMOTHER_SCHEMA);
+    const polished = pickString(raw, 'text');
+    const suggestions = (Array.isArray(raw.suggestions) ? raw.suggestions : [])
+      .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+      .map((s) => s.trim().slice(0, 300))
+      .slice(0, 3);
+    if (!suggestions.length) {
+      throw new ProviderRequestError('fairy godmother', 502, 'no suggestions came back');
+    }
+
+    return {
+      textToModerate: [polished, ...suggestions],
+      metadataToModerate: [],
+      result: { text: polished, suggestions },
+    };
+  },
+};
+
 // --- Shared Gemini plumbing ------------------------------------------------------
 
 async function callGemini(

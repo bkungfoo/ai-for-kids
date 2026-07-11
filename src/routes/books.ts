@@ -33,6 +33,7 @@ import { geminiTtsProvider } from '../providers/geminiTts.js';
 import {
   draftSprinkleProvider,
   fairyDustProvider,
+  godmotherProvider,
   suggestPromptProvider,
 } from '../providers/fairyDust.js';
 import { optionalString, requireString, ValidationError } from './validate.js';
@@ -742,6 +743,49 @@ booksApiRouter.post(
     if (book.status === 'published') return publishedConflict(res);
 
     const outcome = await runGuardedGeneration(draftSprinkleProvider, { book, text });
+    res.status(outcome.status).json(outcome.body);
+  }),
+);
+
+// --- Fairy Godmother: polish the page's words + 3 next-sentence ideas -----------
+// Context runs BOTH ways: earlier pages and later pages (when writing or
+// editing mid-book), so her suggestions bridge toward what already happens.
+booksApiRouter.post(
+  '/:id/godmother',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const text = optionalString(req.body, 'text', { maxLength: 2000 }) ?? '';
+
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+
+    // Either editing an existing page (its stored words are replaced by the
+    // live text) or writing a new one at insertAt (defaults to the end).
+    const body = req.body as { editIndex?: unknown; insertAt?: unknown };
+    const editIndex = Number(body.editIndex);
+    let targetPos: number;
+    let excludeIndex: number | undefined;
+    if (Number.isInteger(editIndex) && editIndex >= 0 && book.pages[editIndex] && !book.pages[editIndex]!.isEnd) {
+      targetPos = editIndex;
+      excludeIndex = editIndex;
+    } else {
+      const insertAt = Number(body.insertAt);
+      const pos = Number.isInteger(insertAt) && insertAt >= 0
+        ? Math.min(insertAt, book.pages.length)
+        : book.pages.length;
+      targetPos = pos - 0.5;
+    }
+
+    const outcome = await runGuardedGeneration(godmotherProvider, {
+      book,
+      text,
+      targetPos,
+      ...(excludeIndex !== undefined ? { excludeIndex } : {}),
+    });
     res.status(outcome.status).json(outcome.body);
   }),
 );
