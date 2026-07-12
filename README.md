@@ -84,10 +84,12 @@ Other statuses: `400` invalid body · `501` provider not configured ·
 
 ### Choosing the moderation model
 
-`MODERATION_MODEL` defaults to `claude-opus-4-8` — for child safety, correctness
-matters more than cost or latency. For high request volumes where you want lower
-latency, `claude-haiku-4-5` is a strong, much faster alternative. `MODERATION_EFFORT`
-(`low`/`medium`/`high`) trades depth for speed.
+`MODERATION_MODEL` picks both the model and the provider (inferred from the id:
+`claude-*` → Anthropic, `gemini-*` → Google). It defaults to `claude-opus-4-8` —
+for child safety, correctness matters more than cost or latency. Cheaper/faster
+alternatives: `claude-haiku-4-5`, or `gemini-3.1-flash-lite` (runs on
+`GEMINI_API_KEY`; same rubric, same structured verdict). `MODERATION_EFFORT`
+(`low`/`medium`/`high`) trades depth for speed on the Claude engine.
 
 ## Authentication
 
@@ -122,8 +124,72 @@ API (behind the child session, all content moderated):
 | `GET /v1/books` | list books (id, title, cover, page count) |
 | `POST /v1/books` `{title}` | moderate title → paint cover → create book |
 | `GET /v1/books/:id` | full book with pages + images |
-| `POST /v1/books/:id/pages` `{text, imagePrompt}` | moderate story text → guarded illustration → append page |
+| `POST /v1/books/:id/pages` `{text, imagePrompt, insertAt?}` | moderate story text → guarded illustration → append page (or insert at `insertAt`) |
+| `POST /v1/books/:id/pages/:index/move` `{to}` | reorder story pages ("The End" stays last) |
+| `POST /v1/books/:id/pages/:index/duplicate` | copy a page (words, picture, doodle) right after itself |
+| `DELETE /v1/books/:id/pages/:index` | remove one story page |
+| `POST /v1/books/:id/pages/:index/narration` | read-aloud audio for a page (see below) |
+| `POST /v1/books/:id/pages/:index/sprinkle` | fairy dust: AI-polish the page's words (see below) |
+| `POST /v1/books/:id/unpublish` | author-only: pull the book off the library, back to an editable draft |
 | `DELETE /v1/books/:id` | remove a book |
+
+**Read to me.** Every page (and the cover, which offers *"Read this book to
+me"* with automatic page turning) has a 🔊 button. The cover intro ("Title.
+Written by …") is narrated by the same engine, cached on the book
+(`book.introNarration`, re-generated in the background when the authors
+change). Narration runs through the
+guarded pipeline on the first configured engine — ElevenLabs
+(`ELEVENLABS_NARRATOR_VOICE`) when its key is set, otherwise **Gemini TTS** on
+the AI Studio key (`GEMINI_TTS_MODEL`/`GEMINI_TTS_VOICE`, delivered "warmly,
+for a young child"; compressed to MP3 via ffmpeg) — and is cached on the page
+(`page.narration`, keyed by engine + voice + speed so config changes
+regenerate instead of replaying stale audio, and cleared when the words
+change). Narration is also **pre-generated in the background** whenever a
+page's words are created or changed (add page, edit text, fairy dust), so the
+first "Read to me" starts instantly. Playback tempo is `NARRATION_SPEED`
+(default 1.2). It is allowed on published
+library books too — derived audio of already-moderated words, not an edit.
+With neither engine configured the reader falls back to the browser's built-in
+speech synthesis, which also highlights each word as it is spoken.
+
+**Fairy dust.** Inside an open words editor (the new-page form, or "Edit
+text" on a saved page — which opens the same editor prefilled with the page's
+words) a 🪄 button has a rainbow wand
+sweep across the text in a trail of sparkly dust; when the dust vanishes the
+child's words reappear with perfect grammar, flowing smoothly with the rest of
+the story, in elementary-age language (Google Gemini via `GEMINI_API_KEY`;
+`FAIRY_DUST_MODEL`, default `gemini-3.1-flash-lite`; guarded pipeline:
+the words are moderated in, the rewrite is moderated out). The child's own
+words are kept intact as a background state (`page.sourceText`), so every
+sprinkle re-polishes the *original* and can land on a different fix. If the
+child then types, the typed words become the new background state and future
+sprinkles polish those instead. Nothing persists until the editor's own
+save/paint action (`POST /v1/books/:id/sprinkle-draft`, with `editIndex` when
+editing a saved page so its stored words are excluded from the context).
+
+**Ask Fairy Godmother.** Beside the sprinkle button (on the new-page form and
+inside "Edit text"), a 🧚 button (`POST /v1/books/:id/godmother`) sends the
+Fairy Godmother flying across the page in a trail of dust: she polishes
+whatever the child has written (same rules as fairy dust), then offers **three
+possible next sentences**, each taking the story a different direction. Her
+context runs both ways — pages before AND after the one being written — so
+mid-book suggestions bridge toward what already happens later. Clicking a
+sentence accepts it (it fades in as rainbow sparkle-text and solidifies into
+ink); "No thanks" rejects all three; she can always be asked again.
+
+**Suggest image prompt.** On the picture side of the new-page form, a 💡
+button (`POST /v1/books/:id/suggest-image-prompt`) translates the narrative on
+the left into a concrete **illustration instruction** — a "Draw …" scene with
+each character's appearance carried from the cover description and earlier
+picture prompts (e.g. "a small mouse wearing a red cape") and feelings turned
+into visible actions — and fills the prompt box (overwriting whatever was
+there). Nothing is painted until the child clicks **🖌️ Paint it!**.
+
+**Page management.** In edit mode each page has tools to move it earlier/later
+(reordering never crosses the "The End" page), insert a new page before or
+after it (the illustration context — story-so-far and reference pictures — is
+built from the pages *before* the insert point), or delete it. (A duplicate
+endpoint also exists but is not surfaced in the UI.)
 
 **Draw on the pictures.** In edit mode, a page that already has both its words
 and its AI picture shows a pen palette (pen + colors, eraser, clear) so a child
@@ -162,11 +228,14 @@ we rebuild the context from the storybook on every call to keep characters,
 objects and settings consistent from page to page:
 
 - **prompt** — the scene to draw now, plus reinforcement instructions ("copy the
-  same characters, objects and art style from the reference pictures"), with the
-  **story so far** appended as extra context;
-- **reference images** — the earlier illustrations (the cover as the main
-  character anchor, plus the most recent pages, capped at 6), which Nano Banana
-  Pro copies faces, clothing, objects and style from (it accepts up to 14).
+  same characters, objects, art style — and the same NUMBER of each character —
+  from the reference pictures"), with the **whole story** appended as extra
+  context (pages before AND after the one being painted, so a mid-book repaint
+  or insert honors details established on later pages too);
+- **reference images** — the cover (main-character anchor) plus the page
+  illustrations NEAREST the target position, from both directions, capped at 6
+  (Nano Banana Pro accepts up to 14). A repaint excludes the page's own old
+  picture so it doesn't anchor the composition being replaced.
 
 The Gemini engine gets the same three channels (reference pictures as inline
 image parts; story so far + scene as the text prompt), so consistency works

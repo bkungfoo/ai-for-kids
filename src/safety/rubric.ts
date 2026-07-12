@@ -18,7 +18,7 @@ Block (allowed=false) when the text contains, requests, or would clearly produce
 - sexual: sexual content, nudity, or romantic/sexual themes involving anyone.
 - violence: graphic violence, gore, cruelty, or threats.
 - self_harm: self-harm, suicide, or eating-disorder content.
-- harassment: bullying, demeaning, or targeting a person.
+- harassment: bullying, demeaning, or targeting a REAL person (a classmate, a named individual, "my sister"). Fictional story characters being teased or treated unkindly is NOT harassment (see allowing guidance).
 - hate: slurs or hateful content toward a group.
 - dangerous_acts: instructions for clearly dangerous activities a child could imitate (fire, climbing, choking games, etc.).
 - weapons: making or using weapons.
@@ -32,6 +32,7 @@ Block (allowed=false) when the text contains, requests, or would clearly produce
 Allowing guidance:
 - Be protective but not paranoid. Ordinary kid creativity is fine: friendly monsters, silly songs, cartoon adventures, mild make-believe peril ("a dragon chases the hero"), drawings of animals, simple games and apps.
 - Mild cartoon-style conflict is allowed (age_inappropriate only for genuinely graphic or frightening material).
+- Stories where a CHARACTER is teased, doubted, left out, or treated unkindly — especially when the story frames it as wrong or the character overcomes it — are a classic, healthy children's theme (an underdog tale). ALLOW these. Block only cruelty that is graphic, glorified as a thing to imitate, or aimed at a real person.
 - When unsure between allowing benign creativity and blocking, lean toward ALLOW for low-stakes content, but ALWAYS block anything sexual, self-harm, weapons, drugs, or that exposes a child's personal information.
 
 Set severity to the highest applicable: none, low, medium, or high.

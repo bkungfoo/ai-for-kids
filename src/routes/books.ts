@@ -9,20 +9,35 @@ import {
   addPage,
   createBook,
   deleteBook,
+  deletePage,
   discardSnapshot,
+  duplicatePage,
   getBook,
   listBooks,
+  movePage,
   publishBook,
   removeEndPage,
   revertBook,
   snapshotBook,
+  unpublishBook,
   updateAuthors,
   updateCover,
+  updateIntroNarration,
   updatePage,
   type Book,
   type BookImage,
   type BookPage,
 } from '../books/store.js';
+import { config } from '../config.js';
+import { logger } from '../logger.js';
+import { elevenLabsProvider } from '../providers/elevenlabs.js';
+import { geminiTtsProvider } from '../providers/geminiTts.js';
+import {
+  draftSprinkleProvider,
+  fairyDustProvider,
+  godmotherProvider,
+  suggestPromptProvider,
+} from '../providers/fairyDust.js';
 import { optionalString, requireString, ValidationError } from './validate.js';
 
 /**
@@ -52,19 +67,20 @@ function coverPrompt(title: string, userPrompt?: string): string {
   );
 }
 
-/** Most recent story text that fits the budget (drop oldest pages first). */
+/** Story text that fits the budget (pages nearest the target win). */
 const STORY_CONTEXT_MAX_CHARS = 2500;
 
 /**
- * Cover + up to five recent page images. Nano Banana Pro accepts up to 14
- * references; we keep it small (the cover as the main-character anchor, plus the
- * latest pages) to bound the request while staying visually consistent.
+ * Cover + up to five page images. Nano Banana Pro accepts up to 14 references;
+ * we keep it small (the cover as the main-character anchor, plus the pages
+ * nearest the one being painted) to bound the request while staying visually
+ * consistent.
  */
 const MAX_REFERENCE_IMAGES = 6;
 
 /**
- * The scene to draw for one page, with reinforcement instructions. The narrative
- * so far is passed SEPARATELY (as `context`) and earlier pictures as reference
+ * The scene to draw for one page, with reinforcement instructions. The story
+ * is passed SEPARATELY (as `context`) and other pages' pictures as reference
  * images, so a stateless engine can still keep characters and objects consistent.
  */
 function pageScenePrompt(
@@ -74,12 +90,14 @@ function pageScenePrompt(
   hasReferences: boolean,
 ): string {
   const reinforcement = hasReferences
-    ? 'You are also given reference pictures from earlier pages of THIS SAME book. ' +
-      'Copy the exact same characters (their faces, hair, skin tone and clothing), objects and ' +
-      'art style from those reference pictures so the whole book looks consistent — including any ' +
-      'changes that already happened to them (for example, a scraped knee stays scraped).'
-    : 'Keep the picture consistent with the story so far — the same characters, places and ' +
-      'objects, including any changes that happened to them in earlier pages.';
+    ? 'You are also given reference pictures from other pages of THIS SAME book (earlier and ' +
+      'later ones). Copy the exact same characters (their faces, hair, skin tone and clothing), ' +
+      'objects and art style from those reference pictures so the whole book looks consistent — ' +
+      'the SAME NUMBER of each character or group as the other pictures show, wearing the same ' +
+      'clothes — including any changes the story already made to them (for example, a scraped ' +
+      'knee stays scraped).'
+    : 'Keep the picture consistent with the rest of the story — the same characters, places and ' +
+      'objects, including any changes that happen to them across the pages.';
   return (
     `Illustration for one page of a children's picture storybook titled "${book.title}", ` +
     'in a bright, colorful, friendly art style. No text, words or lettering in the image.\n' +
@@ -89,30 +107,55 @@ function pageScenePrompt(
   );
 }
 
-/** The narrative so far (most recent pages that fit the budget), or undefined. */
-function storyContext(priorTexts: string[]): string | undefined {
-  const parts: string[] = [];
+/**
+ * The WHOLE story as context — pages before and after the one being painted —
+ * so a mid-book repaint or insert stays consistent with what is established on
+ * later pages too (who wears what, how many siblings there are, ...). When the
+ * budget bites, the pages nearest the target position win. `targetPos` is the
+ * page's index (use index - 0.5 / pages.length - 0.5 for a page that isn't in
+ * the array yet, i.e. an insert or append).
+ */
+function wholeStoryContext(pages: BookPage[], targetPos: number): string | undefined {
+  const story = pages
+    .map((p, i) => ({ i, text: p.text, isEnd: p.isEnd }))
+    .filter((p) => !p.isEnd && p.text.trim());
+  const byDistance = [...story].sort(
+    (a, b) => Math.abs(a.i - targetPos) - Math.abs(b.i - targetPos),
+  );
+  const keep = new Set<number>();
   let used = 0;
-  for (let i = priorTexts.length - 1; i >= 0; i--) {
-    const t = priorTexts[i]!;
-    if (used + t.length > STORY_CONTEXT_MAX_CHARS) break;
-    parts.unshift(t);
-    used += t.length;
+  for (const p of byDistance) {
+    if (used + p.text.length > STORY_CONTEXT_MAX_CHARS) break;
+    keep.add(p.i);
+    used += p.text.length;
   }
-  return parts.length ? `The story so far (earlier pages):\n${parts.join('\n')}` : undefined;
+  if (keep.size === 0) return undefined;
+  const lines = story
+    .filter((p) => keep.has(p.i))
+    .map((p) => `Page ${p.i + 1}${p.i === targetPos ? ' (the page being illustrated)' : ''}: ${p.text}`);
+  return (
+    'The whole story, for consistency (characters, their clothing, places, and how MANY of ' +
+    `each character there are must match every other page):\n${lines.join('\n')}`
+  );
 }
 
 /**
- * Earlier pictures to hand the model as visual references: the cover (main
- * character anchor) followed by the most recent page images, capped.
+ * Pictures to hand the model as visual references: the cover (main-character
+ * anchor) plus the page images NEAREST the target position — from both before
+ * and after it, so details established on later pages carry into a repaint or
+ * a mid-book insert. `excludeIndex` skips the page being repainted (its old
+ * picture would anchor the model to the composition we are replacing).
  */
-function referenceImages(book: Book, priorPages: BookPage[]): BookImage[] {
+function referenceImages(book: Book, targetPos: number, excludeIndex?: number): BookImage[] {
   const refs: BookImage[] = [];
   if (book.cover) refs.push(book.cover);
-  const pageImages = priorPages
-    .map((p) => p.image)
-    .filter((img): img is BookImage => Boolean(img));
-  refs.push(...pageImages.slice(-(MAX_REFERENCE_IMAGES - refs.length)));
+  const nearest = book.pages
+    .map((p, i) => ({ i, image: p.image }))
+    .filter((c): c is { i: number; image: BookImage } => Boolean(c.image) && c.i !== excludeIndex)
+    .sort((a, b) => Math.abs(a.i - targetPos) - Math.abs(b.i - targetPos))
+    .slice(0, MAX_REFERENCE_IMAGES - refs.length)
+    .sort((a, b) => a.i - b.i); // hand them over in book order
+  refs.push(...nearest.map((c) => c.image));
   return refs;
 }
 
@@ -247,6 +290,8 @@ booksApiRouter.post(
       imageEngine,
       currentUser(req),
     );
+    // Pre-generate the cover intro so "Read this book to me" starts instantly.
+    warmIntroNarration(book.id);
     res.status(201).json({ ok: true, book: summarize(book) });
   }),
 );
@@ -299,7 +344,17 @@ booksApiRouter.get(
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
-    res.json({ ok: true, book });
+    // Hide narration cached under an old voice/speed so the reader regenerates
+    // instead of playing stale audio (response only; the file is untouched).
+    for (const page of book.pages) {
+      if (page.narration && !validNarration(page)) delete page.narration;
+    }
+    if (book.introNarration && book.introNarration.key !== narrationKey()) {
+      delete book.introNarration;
+    }
+    // `mine` lets the reader offer owner-only actions (e.g. unpublish) even on
+    // published books, which anyone signed in may read.
+    res.json({ ok: true, book, mine: book.owner === currentUser(req) });
   }),
 );
 
@@ -310,6 +365,13 @@ booksApiRouter.post(
     const bookId = req.params.id ?? '';
     const text = requireString(req.body, 'text', { maxLength: 2000 });
     const imagePrompt = requireString(req.body, 'imagePrompt', { maxLength: 1000 });
+    // Optional: slot the new page in at this index instead of appending.
+    const insertAtRaw = (req.body as { insertAt?: unknown } | undefined)?.insertAt;
+    const insertAt =
+      insertAtRaw === undefined || insertAtRaw === null ? undefined : Number(insertAtRaw);
+    if (insertAt !== undefined && (!Number.isInteger(insertAt) || insertAt < 0)) {
+      throw new ValidationError('"insertAt" must be a non-negative integer');
+    }
 
     const existing = await getOwnedBook(bookId, currentUser(req));
     if (!existing) {
@@ -332,13 +394,14 @@ booksApiRouter.post(
     }
 
     // The illustration runs through the full guarded pipeline. We hand the
-    // engine the story so far (context) and the earlier pictures (references) so
-    // characters, objects and settings stay consistent from page to page.
-    const priorPages = existing.pages;
-    const refs = referenceImages(existing, priorPages);
+    // engine the whole story (context) and the nearest pages' pictures
+    // (references) — before AND after the target position, so a mid-book
+    // insert stays consistent with what later pages establish too.
+    const targetPos = (insertAt ?? existing.pages.length) - 0.5; // between pages
+    const refs = referenceImages(existing, targetPos);
     const outcome = await runGuardedGeneration(imageProviderFor(existing.imageEngine), {
       prompt: pageScenePrompt(existing, text, imagePrompt, refs.length > 0),
-      context: storyContext(priorPages.map((p) => p.text)),
+      context: wholeStoryContext(existing.pages, targetPos),
       referenceImages: refs,
     });
     if (outcome.status !== 200) {
@@ -346,16 +409,18 @@ booksApiRouter.post(
       return;
     }
 
-    const book = await addPage(bookId, {
-      text,
-      imagePrompt,
-      image: firstImage(outcome.body.result),
-    });
-    if (!book) {
+    const added = await addPage(
+      bookId,
+      { text, imagePrompt, image: firstImage(outcome.body.result) },
+      insertAt,
+    );
+    if (!added) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
-    res.status(201).json({ ok: true, book, pageIndex: book.pages.length - 1 });
+    // Pre-generate the read-aloud audio so "Read to me" starts instantly.
+    warmNarration(bookId, added.pageIndex, text);
+    res.status(201).json({ ok: true, book: added.book, pageIndex: added.pageIndex });
   }),
 );
 
@@ -375,11 +440,13 @@ booksApiRouter.post(
     }
     if (book.status === 'published') return publishedConflict(res);
 
-    const priorPages = book.pages.slice(0, index);
-    const refs = referenceImages(book, priorPages);
+    // Whole-book context: pages AFTER this one count too (characters keep the
+    // clothes and group sizes established anywhere in the book). The page's own
+    // old picture is excluded so it doesn't anchor the composition we replace.
+    const refs = referenceImages(book, index, index);
     const outcome = await runGuardedGeneration(imageProviderFor(book.imageEngine), {
       prompt: pageScenePrompt(book, page.text, imagePrompt, refs.length > 0),
-      context: storyContext(priorPages.map((p) => p.text)),
+      context: wholeStoryContext(book.pages, index),
       referenceImages: refs,
     });
     if (outcome.status !== 200) {
@@ -435,11 +502,20 @@ booksApiRouter.patch(
       return;
     }
 
-    const updated = await updatePage(bookId, index, { text });
+    // New words invalidate any cached read-aloud audio for the page — and
+    // become the new fairy-dust background state (sourceText is cleared, so
+    // future sprinkles polish THIS text, not the pre-sprinkle original).
+    const updated = await updatePage(bookId, index, {
+      text,
+      narration: null,
+      sourceText: undefined,
+    });
     if (!updated) {
       res.status(404).json({ ok: false, error: 'Page not found' });
       return;
     }
+    // Pre-generate the read-aloud audio for the new words.
+    warmNarration(bookId, index, text);
     res.json({ ok: true, book: updated, pageIndex: index });
   }),
 );
@@ -476,6 +552,399 @@ booksApiRouter.put(
   }),
 );
 
+// --- Read-aloud narration for a page (generated once, then cached) -------------
+
+/**
+ * Cache-validity key for stored narration: engine + voice + speed + format
+ * revision. Cached audio is replayed only while this matches (so changing the
+ * voice or tempo — or old pre-key entries — regenerates instead of playing
+ * stale audio).
+ */
+function narrationKey(): string {
+  if (elevenLabsProvider.isConfigured()) {
+    return `el:${config.providers.elevenlabs.narratorVoiceId}:r2`;
+  }
+  const { model, voice, speed } = config.providers.geminiTts;
+  return `gt:${model}:${voice}:${speed}:r2`;
+}
+
+function validNarration(page: BookPage) {
+  return page.narration && page.narration.key === narrationKey() ? page.narration : undefined;
+}
+
+/**
+ * Synthesize narration for one page's words through the guarded pipeline.
+ * Engine: ElevenLabs when its key is set, else Gemini TTS on the AI Studio
+ * key. Returns the narration payload, or the non-200 outcome for forwarding.
+ */
+async function synthesizeNarration(text: string) {
+  const outcome = elevenLabsProvider.isConfigured()
+    ? await runGuardedGeneration(elevenLabsProvider, {
+        text,
+        voiceId: config.providers.elevenlabs.narratorVoiceId,
+      })
+    : await runGuardedGeneration(geminiTtsProvider, { text });
+  if (outcome.status !== 200) return { outcome, narration: undefined };
+  const result = outcome.body.result as {
+    contentType: string;
+    audioBase64: string;
+    voiceId: string;
+  };
+  return {
+    outcome,
+    narration: {
+      mimeType: result.contentType,
+      dataBase64: result.audioBase64,
+      voiceId: result.voiceId,
+      key: narrationKey(),
+    },
+  };
+}
+
+/**
+ * Pre-generate a page's narration in the background so the first "Read to me"
+ * doesn't lag. Fired (not awaited) after the page's words are created or
+ * changed. Saves only if the words are still the same when the audio is ready
+ * (a fast follow-up edit wins), and never breaks the request that spawned it.
+ */
+function warmNarration(bookId: string, pageIndex: number, text: string): void {
+  void (async () => {
+    try {
+      const { narration } = await synthesizeNarration(text);
+      if (!narration) return; // engine unconfigured / blocked — nothing to warm
+      const book = await getBook(bookId);
+      const page = book?.pages[pageIndex];
+      if (!book || !page || page.text !== text) return; // page changed/moved meanwhile
+      if (validNarration(page)) return; // someone already narrated it
+      await updatePage(bookId, pageIndex, { narration });
+      logger.info('narration pre-generated', { bookId, pageIndex, bytes: narration.dataBase64.length });
+    } catch (err) {
+      logger.warn('narration pre-generation failed', {
+        bookId,
+        pageIndex,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  })();
+}
+
+/** The spoken cover intro; must match the reader's browser-voice fallback. */
+function introText(book: Book): string {
+  const a = book.authors.filter(Boolean);
+  const by =
+    a.length === 0 ? '' : a.length === 1 ? a[0]! : `${a.slice(0, -1).join(', ')} and ${a.at(-1)}`;
+  return book.title + (by ? `. Written by ${by}.` : '.');
+}
+
+/** Pre-generate the cover-intro narration (same guarantees as warmNarration). */
+function warmIntroNarration(bookId: string): void {
+  void (async () => {
+    try {
+      const book = await getBook(bookId);
+      if (!book) return;
+      const text = introText(book);
+      const { narration } = await synthesizeNarration(text);
+      if (!narration) return;
+      const fresh = await getBook(bookId);
+      if (!fresh || introText(fresh) !== text) return; // authors changed meanwhile
+      if (fresh.introNarration && fresh.introNarration.key === narrationKey()) return;
+      await updateIntroNarration(bookId, narration);
+      logger.info('intro narration pre-generated', { bookId });
+    } catch (err) {
+      logger.warn('intro narration pre-generation failed', {
+        bookId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  })();
+}
+
+// The cover intro ("Title. Written by …") — same visibility and caching rules
+// as page narration, cached on the book itself.
+booksApiRouter.post(
+  '/:id/intro-narration',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const book = await getBook(bookId);
+    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    const cached =
+      book.introNarration && book.introNarration.key === narrationKey()
+        ? book.introNarration
+        : undefined;
+    if (cached) {
+      res.json({ ok: true, narration: cached, cached: true });
+      return;
+    }
+    const { outcome, narration } = await synthesizeNarration(introText(book));
+    if (!narration) {
+      res.status(outcome.status).json(outcome.body);
+      return;
+    }
+    await updateIntroNarration(bookId, narration);
+    res.json({ ok: true, narration });
+  }),
+);
+
+booksApiRouter.post(
+  '/:id/pages/:index/narration',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const index = Number.parseInt(req.params.index ?? '', 10);
+
+    // Same visibility rule as reading the book: the owner always may; anyone
+    // signed in may narrate a PUBLISHED library book. Narration is derived
+    // audio of already-moderated words, not an edit, so published books allow
+    // it too (the audio is cached into the book so it is generated only once).
+    const book = await getBook(bookId);
+    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    const page = Number.isInteger(index) && index >= 0 ? book.pages[index] : undefined;
+    if (!page || !page.text) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+
+    // Cached (and still matching the current voice/speed)? Replay for free.
+    const cached = validNarration(page);
+    if (cached) {
+      res.json({ ok: true, narration: cached, pageIndex: index, cached: true });
+      return;
+    }
+
+    // 501 only when no narrator engine is configured — the reader then falls
+    // back to the browser's built-in speech synthesis.
+    const { outcome, narration } = await synthesizeNarration(page.text);
+    if (!narration) {
+      res.status(outcome.status).json(outcome.body);
+      return;
+    }
+    await updatePage(bookId, index, { narration });
+    res.json({ ok: true, narration, pageIndex: index });
+  }),
+);
+
+// --- Fairy dust: polish a page's words (grammar + flow, kid-readable) -----------
+booksApiRouter.post(
+  '/:id/pages/:index/sprinkle',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const index = Number.parseInt(req.params.index ?? '', 10);
+
+    const book = await getOwnedBook(bookId, currentUser(req));
+    const page = Number.isInteger(index) && index >= 0 ? book?.pages[index] : undefined;
+    if (!book || !page) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+    if (page.isEnd || !page.text.trim()) {
+      res.status(409).json({ ok: false, error: 'This page has no words to sprinkle' });
+      return;
+    }
+
+    // Always polish the child's ORIGINAL words (the background state), so
+    // sprinkling again gives a fresh fix of the original — not a fix of a fix.
+    const sourceText = page.sourceText ?? page.text;
+    const outcome = await runGuardedGeneration(fairyDustProvider, {
+      book,
+      pageIndex: index,
+      sourceText,
+    });
+    if (outcome.status !== 200) {
+      res.status(outcome.status).json(outcome.body);
+      return;
+    }
+    const polished = (outcome.body.result as { text: string }).text;
+    const updated = await updatePage(bookId, index, {
+      text: polished,
+      sourceText,
+      narration: null, // the words changed — stale read-aloud audio goes
+    });
+    if (!updated) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    // Pre-generate the read-aloud audio for the polished words.
+    warmNarration(bookId, index, polished);
+    res.json({ ok: true, book: updated, pageIndex: index });
+  }),
+);
+
+// --- Suggest an image prompt from the page narrative ----------------------------
+// Translates the story words into a concrete "Draw ..." illustration
+// instruction, with character appearances carried from the cover description
+// and earlier picture prompts. Nothing is stored; the form fills its box.
+booksApiRouter.post(
+  '/:id/suggest-image-prompt',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const text = requireString(req.body, 'text', { maxLength: 2000 });
+
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+
+    const outcome = await runGuardedGeneration(suggestPromptProvider, { book, text });
+    res.status(outcome.status).json(outcome.body);
+  }),
+);
+
+// --- Fairy dust on an open words editor (new page OR edit-text; not stored) -----
+booksApiRouter.post(
+  '/:id/sprinkle-draft',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const text = requireString(req.body, 'text', { maxLength: 2000 });
+
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+
+    // When an existing page is being edited, its stored words are excluded from
+    // the story context (the live editor text replaces them).
+    const editIndex = Number((req.body as { editIndex?: unknown }).editIndex);
+    const excludeIndex =
+      Number.isInteger(editIndex) && editIndex >= 0 && book.pages[editIndex]
+        ? editIndex
+        : undefined;
+
+    const outcome = await runGuardedGeneration(draftSprinkleProvider, {
+      book,
+      text,
+      ...(excludeIndex !== undefined ? { excludeIndex } : {}),
+    });
+    res.status(outcome.status).json(outcome.body);
+  }),
+);
+
+// --- Fairy Godmother: polish the page's words + 3 next-sentence ideas -----------
+// Context runs BOTH ways: earlier pages and later pages (when writing or
+// editing mid-book), so her suggestions bridge toward what already happens.
+booksApiRouter.post(
+  '/:id/godmother',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const text = optionalString(req.body, 'text', { maxLength: 2000 }) ?? '';
+
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+
+    // Either editing an existing page (its stored words are replaced by the
+    // live text) or writing a new one at insertAt (defaults to the end).
+    const body = req.body as { editIndex?: unknown; insertAt?: unknown };
+    const editIndex = Number(body.editIndex);
+    let targetPos: number;
+    let excludeIndex: number | undefined;
+    if (Number.isInteger(editIndex) && editIndex >= 0 && book.pages[editIndex] && !book.pages[editIndex]!.isEnd) {
+      targetPos = editIndex;
+      excludeIndex = editIndex;
+    } else {
+      const insertAt = Number(body.insertAt);
+      const pos = Number.isInteger(insertAt) && insertAt >= 0
+        ? Math.min(insertAt, book.pages.length)
+        : book.pages.length;
+      targetPos = pos - 0.5;
+    }
+
+    const outcome = await runGuardedGeneration(godmotherProvider, {
+      book,
+      text,
+      targetPos,
+      ...(excludeIndex !== undefined ? { excludeIndex } : {}),
+    });
+    res.status(outcome.status).json(outcome.body);
+  }),
+);
+
+// --- Page management: move / duplicate / remove a story page --------------------
+booksApiRouter.post(
+  '/:id/pages/:index/move',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const from = Number.parseInt(req.params.index ?? '', 10);
+    const toRaw = (req.body as { to?: unknown } | undefined)?.to;
+    const to = Number(toRaw);
+    if (!Number.isInteger(to) || to < 0) {
+      throw new ValidationError('"to" must be a non-negative page index');
+    }
+
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+
+    // movePage enforces that both spots are story pages ("The End" stays last).
+    const updated = await movePage(bookId, from, to);
+    if (!updated) {
+      res.status(409).json({ ok: false, error: 'That page cannot move there' });
+      return;
+    }
+    res.json({ ok: true, book: updated, pageIndex: to });
+  }),
+);
+
+booksApiRouter.post(
+  '/:id/pages/:index/duplicate',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const index = Number.parseInt(req.params.index ?? '', 10);
+
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+
+    // Copies the already-moderated words, picture, doodle and narration as-is.
+    const updated = await duplicatePage(bookId, index);
+    if (!updated) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    res.status(201).json({ ok: true, book: updated, pageIndex: index + 1 });
+  }),
+);
+
+booksApiRouter.delete(
+  '/:id/pages/:index',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const index = Number.parseInt(req.params.index ?? '', 10);
+
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+
+    const updated = await deletePage(bookId, index);
+    if (!updated) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    res.json({ ok: true, book: updated });
+  }),
+);
+
 // --- Close the book with a "The End" page --------------------------------------
 booksApiRouter.post(
   '/:id/end',
@@ -492,12 +961,13 @@ booksApiRouter.post(
       return;
     }
     // Fixed, safe text — no moderation or illustration needed.
-    const book = await addPage(bookId, { text: 'The End', imagePrompt: '', image: null, isEnd: true });
-    if (!book) {
+    const added = await addPage(bookId, { text: 'The End', imagePrompt: '', image: null, isEnd: true });
+    if (!added) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
-    res.status(201).json({ ok: true, book, pageIndex: book.pages.length - 1 });
+    warmNarration(bookId, added.pageIndex, 'The End');
+    res.status(201).json({ ok: true, book: added.book, pageIndex: added.pageIndex });
   }),
 );
 
@@ -597,6 +1067,8 @@ booksApiRouter.patch(
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
+    // "Written by …" changed — re-narrate the cover intro in the background.
+    warmIntroNarration(bookId);
     res.json({ ok: true, book });
   }),
 );
@@ -619,6 +1091,26 @@ booksApiRouter.post(
     // Publishing keeps the edits — any pending edit-session snapshot is stale.
     await discardSnapshot(book.id);
     res.json({ ok: true, book: summarize(book) });
+  }),
+);
+
+// --- Unpublish: the author pulls their book off the library ---------------------
+booksApiRouter.post(
+  '/:id/unpublish',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    // Only the author account may pull its own book back.
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status !== 'published') {
+      res.status(409).json({ ok: false, error: 'This book is not in the library' });
+      return;
+    }
+    const updated = await unpublishBook(bookId);
+    res.json({ ok: true, book: updated });
   }),
 );
 

@@ -127,6 +127,21 @@ export const config = {
     cookieSecure: bool('COOKIE_SECURE', false),
   },
 
+  // Operator alerting (e.g. "AI credits ran out"). Email is sent via
+  // ALERT_SMTP_* when configured (GCP blocks direct port-25 delivery, so a
+  // relay such as smtp.gmail.com:465 + a Gmail App Password is needed);
+  // otherwise the local sendmail binary is tried, and the alert is always
+  // written to the service journal.
+  alerts: {
+    email: str('ALERT_EMAIL', 'brian.foo@gmail.com'),
+    smtp: {
+      host: str('ALERT_SMTP_HOST'),
+      port: int('ALERT_SMTP_PORT', 465),
+      user: str('ALERT_SMTP_USER'),
+      pass: str('ALERT_SMTP_PASS'),
+    },
+  },
+
   // Adult-only operator review area (see reviewPassword above). Disabled unless
   // a password is configured. Uses its own cookie/session, separate from the
   // child login, with a shorter default lifetime.
@@ -145,6 +160,9 @@ export const config = {
     elevenlabs: {
       apiKey: str('ELEVENLABS_API_KEY'),
       baseUrl: str('ELEVENLABS_BASE_URL', 'https://api.elevenlabs.io'),
+      // Storybook read-aloud narrator voice. When no ElevenLabs key is set the
+      // reader falls back to the browser's built-in speech synthesis.
+      narratorVoiceId: str('ELEVENLABS_NARRATOR_VOICE', 'EXAVITQu4vr4xnSDxMaL'),
     },
     gemini: {
       apiKey: str('GEMINI_API_KEY'),
@@ -170,6 +188,22 @@ export const config = {
     claudeCode: {
       // Uses the top-level Anthropic API key.
       model: str('CLAUDE_CODE_MODEL', 'claude-opus-4-8'),
+    },
+    // Storybook "fairy dust": rewrites a page's words with perfect grammar and
+    // smooth story flow, in elementary-age language. Runs on Google Gemini via
+    // the same AI Studio key as image generation (GEMINI_API_KEY).
+    fairyDust: {
+      model: str('FAIRY_DUST_MODEL', 'gemini-3.1-flash-lite'),
+    },
+    // Storybook narrator on Gemini TTS (same AI Studio key) — used when
+    // ElevenLabs isn't configured. Kid-friendly prebuilt voices include
+    // Leda (youthful), Aoede (breezy), Zephyr (bright), Kore (firm).
+    geminiTts: {
+      model: str('GEMINI_TTS_MODEL', 'gemini-3.1-flash-tts-preview'),
+      voice: str('GEMINI_TTS_VOICE', 'Leda'),
+      // Playback tempo applied during the MP3 encode (pitch-preserving).
+      // 1.2 = 20% faster than the model's natural read. Clamped to 0.5–2.
+      speed: Math.min(2, Math.max(0.5, Number(str('NARRATION_SPEED', '1.2')) || 1.2)),
     },
   },
 } as const;
