@@ -133,7 +133,10 @@ API (behind the child session, all content moderated):
 | `DELETE /v1/books/:id` | remove a book |
 
 **Read to me.** Every page (and the cover, which offers *"Read this book to
-me"* with automatic page turning) has a 🔊 button. Narration runs through the
+me"* with automatic page turning) has a 🔊 button. The cover intro ("Title.
+Written by …") is narrated by the same engine, cached on the book
+(`book.introNarration`, re-generated in the background when the authors
+change). Narration runs through the
 guarded pipeline on the first configured engine — ElevenLabs
 (`ELEVENLABS_NARRATOR_VOICE`) when its key is set, otherwise **Gemini TTS** on
 the AI Studio key (`GEMINI_TTS_MODEL`/`GEMINI_TTS_VOICE`, delivered "warmly,

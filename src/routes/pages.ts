@@ -1076,19 +1076,37 @@ function readerClientJs(): string {
     const label = '🔊 Read this book to me';
     btn.textContent = label;
     row.appendChild(btn);
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       if (reading && reading.btn === btn) { stopReading(); return; }
       haltPlayback();
       if (!book.pages.length) { setStatus('This book has no pages to read yet!', 'blocked'); return; }
       readAllMode = true;
       btn.classList.add('reading');
       btn.textContent = '⏹ Stop reading';
-      const by = authorsLine(book.authors);
-      const intro = book.title + (by ? '. Written by ' + by + '.' : '.');
-      const r = speakText(intro, null, () => {
+      const onDone = () => {
         if (reading && reading.btn === btn) haltPlayback();
         if (readAllMode) advanceReadAll();
-      });
+      };
+      // The narrator voice reads the cover intro too: cached audio -> server
+      // narration -> browser voice only as the last resort.
+      if (book.introNarration) {
+        reading = { btn: btn, btnLabel: label, audio: playAudio(book.introNarration, onDone) };
+        return;
+      }
+      try {
+        const res = await fetch('/v1/books/' + bookId + '/intro-narration', { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
+          book.introNarration = data.narration; // cache client-side too
+          if (!readAllMode) return; // stopped while we were fetching
+          reading = { btn: btn, btnLabel: label, audio: playAudio(data.narration, onDone) };
+          return;
+        }
+      } catch {}
+      if (!readAllMode) return; // stopped while we were fetching
+      const by = authorsLine(book.authors);
+      const intro = book.title + (by ? '. Written by ' + by + '.' : '.');
+      const r = speakText(intro, null, onDone);
       if (r) reading = { btn: btn, btnLabel: label, utter: r.utter, restore: r.restore };
       else readAllMode = false;
     });

@@ -76,6 +76,12 @@ export interface Book {
    */
   imageEngine?: ImageEngine;
   pages: BookPage[];
+  /**
+   * Cached read-aloud audio for the cover intro ("Title. Written by …") —
+   * same keying/invalidation rules as page narration; cleared when the
+   * authors change.
+   */
+  introNarration?: BookNarration;
   createdAt: string;
   updatedAt: string;
 }
@@ -159,7 +165,21 @@ export async function updateAuthors(id: string, authors: string[]): Promise<Book
   const book = await getBook(id);
   if (!book) return undefined;
   book.authors = authors;
+  delete book.introNarration; // the "written by" line changed
   book.updatedAt = new Date().toISOString();
+  await save(book);
+  return book;
+}
+
+/** Set (or clear) the cached cover-intro narration. */
+export async function updateIntroNarration(
+  id: string,
+  narration: BookNarration | null,
+): Promise<Book | undefined> {
+  const book = await getBook(id);
+  if (!book) return undefined;
+  if (narration) book.introNarration = narration;
+  else delete book.introNarration;
   await save(book);
   return book;
 }

@@ -21,6 +21,7 @@ import {
   snapshotBook,
   updateAuthors,
   updateCover,
+  updateIntroNarration,
   updatePage,
   type Book,
   type BookImage,
@@ -288,6 +289,8 @@ booksApiRouter.post(
       imageEngine,
       currentUser(req),
     );
+    // Pre-generate the cover intro so "Read this book to me" starts instantly.
+    warmIntroNarration(book.id);
     res.status(201).json({ ok: true, book: summarize(book) });
   }),
 );
@@ -344,6 +347,9 @@ booksApiRouter.get(
     // instead of playing stale audio (response only; the file is untouched).
     for (const page of book.pages) {
       if (page.narration && !validNarration(page)) delete page.narration;
+    }
+    if (book.introNarration && book.introNarration.key !== narrationKey()) {
+      delete book.introNarration;
     }
     res.json({ ok: true, book });
   }),
@@ -618,6 +624,66 @@ function warmNarration(bookId: string, pageIndex: number, text: string): void {
     }
   })();
 }
+
+/** The spoken cover intro; must match the reader's browser-voice fallback. */
+function introText(book: Book): string {
+  const a = book.authors.filter(Boolean);
+  const by =
+    a.length === 0 ? '' : a.length === 1 ? a[0]! : `${a.slice(0, -1).join(', ')} and ${a.at(-1)}`;
+  return book.title + (by ? `. Written by ${by}.` : '.');
+}
+
+/** Pre-generate the cover-intro narration (same guarantees as warmNarration). */
+function warmIntroNarration(bookId: string): void {
+  void (async () => {
+    try {
+      const book = await getBook(bookId);
+      if (!book) return;
+      const text = introText(book);
+      const { narration } = await synthesizeNarration(text);
+      if (!narration) return;
+      const fresh = await getBook(bookId);
+      if (!fresh || introText(fresh) !== text) return; // authors changed meanwhile
+      if (fresh.introNarration && fresh.introNarration.key === narrationKey()) return;
+      await updateIntroNarration(bookId, narration);
+      logger.info('intro narration pre-generated', { bookId });
+    } catch (err) {
+      logger.warn('intro narration pre-generation failed', {
+        bookId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  })();
+}
+
+// The cover intro ("Title. Written by …") — same visibility and caching rules
+// as page narration, cached on the book itself.
+booksApiRouter.post(
+  '/:id/intro-narration',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const book = await getBook(bookId);
+    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    const cached =
+      book.introNarration && book.introNarration.key === narrationKey()
+        ? book.introNarration
+        : undefined;
+    if (cached) {
+      res.json({ ok: true, narration: cached, cached: true });
+      return;
+    }
+    const { outcome, narration } = await synthesizeNarration(introText(book));
+    if (!narration) {
+      res.status(outcome.status).json(outcome.body);
+      return;
+    }
+    await updateIntroNarration(bookId, narration);
+    res.json({ ok: true, narration });
+  }),
+);
 
 booksApiRouter.post(
   '/:id/pages/:index/narration',
@@ -998,6 +1064,8 @@ booksApiRouter.patch(
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
+    // "Written by …" changed — re-narrate the cover intro in the background.
+    warmIntroNarration(bookId);
     res.json({ ok: true, book });
   }),
 );
