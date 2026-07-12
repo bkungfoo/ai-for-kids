@@ -196,6 +196,18 @@ export async function publishBook(id: string): Promise<Book | undefined> {
   return book;
 }
 
+/** Pull a book off the library — back to an editable draft on the owner's shelf. */
+export async function unpublishBook(id: string): Promise<Book | undefined> {
+  const book = await getBook(id);
+  if (!book) return undefined;
+  if (book.status === 'published') {
+    book.status = 'draft';
+    book.updatedAt = new Date().toISOString();
+    await save(book);
+  }
+  return book;
+}
+
 export async function listBooks(): Promise<Book[]> {
   let entries: string[];
   try {

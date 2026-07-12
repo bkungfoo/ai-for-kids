@@ -130,6 +130,7 @@ API (behind the child session, all content moderated):
 | `DELETE /v1/books/:id/pages/:index` | remove one story page |
 | `POST /v1/books/:id/pages/:index/narration` | read-aloud audio for a page (see below) |
 | `POST /v1/books/:id/pages/:index/sprinkle` | fairy dust: AI-polish the page's words (see below) |
+| `POST /v1/books/:id/unpublish` | author-only: pull the book off the library, back to an editable draft |
 | `DELETE /v1/books/:id` | remove a book |
 
 **Read to me.** Every page (and the cover, which offers *"Read this book to

@@ -19,6 +19,7 @@ import {
   removeEndPage,
   revertBook,
   snapshotBook,
+  unpublishBook,
   updateAuthors,
   updateCover,
   updateIntroNarration,
@@ -351,7 +352,9 @@ booksApiRouter.get(
     if (book.introNarration && book.introNarration.key !== narrationKey()) {
       delete book.introNarration;
     }
-    res.json({ ok: true, book });
+    // `mine` lets the reader offer owner-only actions (e.g. unpublish) even on
+    // published books, which anyone signed in may read.
+    res.json({ ok: true, book, mine: book.owner === currentUser(req) });
   }),
 );
 
@@ -1088,6 +1091,26 @@ booksApiRouter.post(
     // Publishing keeps the edits — any pending edit-session snapshot is stale.
     await discardSnapshot(book.id);
     res.json({ ok: true, book: summarize(book) });
+  }),
+);
+
+// --- Unpublish: the author pulls their book off the library ---------------------
+booksApiRouter.post(
+  '/:id/unpublish',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    // Only the author account may pull its own book back.
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status !== 'published') {
+      res.status(409).json({ ok: false, error: 'This book is not in the library' });
+      return;
+    }
+    const updated = await unpublishBook(bookId);
+    res.json({ ok: true, book: updated });
   }),
 );
 

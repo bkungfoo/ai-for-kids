@@ -845,6 +845,7 @@ function readerClientJs(): string {
   const statusEl = document.getElementById('status');
 
   let book = null;
+  let mine = false; // signed-in account owns this book (server-computed)
   // Spread 0 = cover; spreads 1..N = story pages; spread N+1 = "add a page"
   // (the add spread disappears once the book has a "The End" page).
   let spread = 0;
@@ -2255,6 +2256,40 @@ function readerClientJs(): string {
       note.className = 'pubnote';
       note.textContent = '📚 This book is published in the library';
       actions.parentNode.insertBefore(note, actions);
+      // The author account may pull its own book back off the library, after
+      // which it is editable again like any book in "My storybooks".
+      if (mine) {
+        actions.hidden = false;
+        const unpub = document.createElement('button');
+        unpub.className = 'cta cancel';
+        unpub.type = 'button';
+        unpub.textContent = '📤 Pull it off the library';
+        unpub.addEventListener('click', async () => {
+          if (!confirm('Take "' + book.title + '" out of the library? It goes back to My storybooks, where you can edit it and publish it again later.')) return;
+          unpub.disabled = true;
+          setStatus('<span class="spinner"></span>Bringing your book home…');
+          try {
+            const res = await fetch('/v1/books/' + bookId + '/unpublish', { method: 'POST' });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.ok) {
+              book = data.book;
+              editMode = false;
+              editSession = false;
+              setStatus('Your book is back on your shelf — press “Edit this book” to change it. 📚➡️🏠');
+              renderActions();
+              render();
+              return;
+            }
+            const f = friendlyError(res, data);
+            setStatus(f.text, f.cls);
+            unpub.disabled = false;
+          } catch {
+            setStatus('Could not reach the server. Check your connection and try again.', 'error');
+            unpub.disabled = false;
+          }
+        });
+        actions.appendChild(unpub);
+      }
       return;
     }
 
@@ -2397,6 +2432,7 @@ function readerClientJs(): string {
         return;
       }
       book = data.book;
+      mine = !!data.mine;
       // A book that was already finished when opened starts as a pure reader;
       // one still being written continues in creation (edit) mode.
       editMode = !finished();
