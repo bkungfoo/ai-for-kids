@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { requirePageAuth } from '../middleware/requireAuth.js';
 import { MUSIC_MOODS, MUSIC_STYLES } from '../music/options.js';
-import { MUSIC_BG_BRIGHT, MUSIC_BG_DARK, MUSIC_BG_KPOP } from './wallpapers.js';
+import { MUSIC_BG_BRIGHT, MUSIC_BG_DARK, MUSIC_BG_PURPLE } from './wallpapers.js';
 import { shell } from './pages.js';
 
 /**
@@ -16,9 +16,9 @@ musicPagesRouter.get('/music', requirePageAuth);
 
 /**
  * Three background modes, switchable on the page (persisted per browser):
- * bright (default, sunny staves), dark (stage with drums and cymbals), and
- * kpop (BTS-style purplish blue). Plain <body> is bright; the picker sets
- * body.bg-dark / body.bg-kpop.
+ * bright (default, sunny staves), dark (a drum kit under a stage spotlight),
+ * and purple (dreamy lavender sky: crescent moon, pink clouds, sparkles).
+ * Plain <body> is bright; the picker sets body.bg-dark / body.bg-purple.
  */
 const MUSIC_MODE_CSS = `<style>
   body { background: #e9f6fb url("data:image/svg+xml,${encodeURIComponent(MUSIC_BG_BRIGHT)}") repeat;
@@ -27,13 +27,14 @@ const MUSIC_MODE_CSS = `<style>
   .back, .signout { color: #35566b; }
   .signout { border-color: rgba(53,86,107,.45); }
   .signout:hover { background: rgba(53,86,107,.08); }
-  body.bg-dark { background: #171226 url("data:image/svg+xml,${encodeURIComponent(MUSIC_BG_DARK)}") repeat; color: #e9e4f5; }
-  body.bg-kpop { background: #3a2f85 url("data:image/svg+xml,${encodeURIComponent(MUSIC_BG_KPOP)}") repeat; color: #f0ecfb; }
-  body.bg-dark header, body.bg-kpop header,
-  body.bg-dark .back, body.bg-kpop .back,
-  body.bg-dark .signout, body.bg-kpop .signout { color: #efeafa; }
-  body.bg-dark .signout, body.bg-kpop .signout { border-color: rgba(239,234,250,.5); }
-  body.bg-dark .signout:hover, body.bg-kpop .signout:hover { background: rgba(239,234,250,.12); }
+  body.bg-dark { background: #0d0d12 url("data:image/svg+xml,${encodeURIComponent(MUSIC_BG_DARK)}") repeat; color: #e9e6ef; }
+  body.bg-dark header, body.bg-dark .back, body.bg-dark .signout { color: #e6e2ee; }
+  body.bg-dark .signout { border-color: rgba(230,226,238,.5); }
+  body.bg-dark .signout:hover { background: rgba(230,226,238,.12); }
+  body.bg-purple { background: #bdaae9 url("data:image/svg+xml,${encodeURIComponent(MUSIC_BG_PURPLE)}") repeat; color: #3c2f66; }
+  body.bg-purple header, body.bg-purple .back, body.bg-purple .signout { color: #4b3d80; }
+  body.bg-purple .signout { border-color: rgba(75,61,128,.45); }
+  body.bg-purple .signout:hover { background: rgba(75,61,128,.08); }
 </style>`;
 
 const MUSIC_CSS = `<style>
@@ -100,7 +101,7 @@ musicPagesRouter.get('/music', (_req: Request, res: Response) => {
           <span class="bg-label">Background:</span>
           <button type="button" class="chip mini" data-bg="bright">☀️ Bright</button>
           <button type="button" class="chip mini" data-bg="dark">🥁 Dark</button>
-          <button type="button" class="chip mini" data-bg="kpop">💜 K-pop</button>
+          <button type="button" class="chip mini" data-bg="purple">🌙 Purple</button>
         </div>
         <h1>🎵 Make music</h1>
         <p class="sub">Pick a style and a mood, add your own idea — then let the music maker sing!</p>
@@ -164,7 +165,8 @@ function musicClientJs(): string {
 
   // --- background modes: bright (default) / dark / kpop, remembered ----------
   function applyBg(mode) {
-    document.body.className = mode === 'dark' ? 'bg-dark' : mode === 'kpop' ? 'bg-kpop' : '';
+    if (mode === 'kpop') mode = 'purple'; // renamed; migrate old saved choice
+    document.body.className = mode === 'dark' ? 'bg-dark' : mode === 'purple' ? 'bg-purple' : '';
     document.querySelectorAll('#bgmodes .chip').forEach(function (c) {
       c.classList.toggle('on', c.dataset.bg === mode);
     });

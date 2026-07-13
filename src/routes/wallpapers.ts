@@ -57,92 +57,127 @@ export const MUSIC_BG_BRIGHT =
   `<text x='318' y='176'>&#10022;</text><text x='250' y='290'>&#10023;</text>` +
   `</g></svg>`;
 
-/** Dark mode: a moody stage with drums, cymbals and drumsticks. */
+/**
+ * Dark mode: a drum kit alone on a dark stage under one cool spotlight —
+ * light cone from above, lit floor circle, amber wood drums, glinting
+ * cymbals, thin stands and mic booms (after the classic stage photo).
+ */
 export const MUSIC_BG_DARK =
   `<svg xmlns='http://www.w3.org/2000/svg' width='340' height='300' viewBox='0 0 340 300'>` +
-  `<defs><linearGradient id='night' x1='0' y1='0' x2='0' y2='1'>` +
-  `<stop offset='0' stop-color='#171226'/><stop offset='1' stop-color='#241b3a'/>` +
-  `</linearGradient></defs>` +
-  `<rect width='340' height='300' fill='url(#night)'/>` +
-  // faint stage stars
-  `<g fill='#cbc0e8' opacity='.28'>` +
-  `<circle cx='30' cy='24' r='1.6'/><circle cx='120' cy='58' r='1.2'/><circle cx='210' cy='20' r='1.5'/>` +
-  `<circle cx='300' cy='48' r='1.3'/><circle cx='70' cy='150' r='1.2'/><circle cx='330' cy='140' r='1.4'/>` +
-  `<circle cx='160' cy='120' r='1.1'/><circle cx='40' cy='262' r='1.4'/><circle cx='250' cy='276' r='1.2'/>` +
+  `<defs>` +
+  `<linearGradient id='void' x1='0' y1='0' x2='0' y2='1'>` +
+  `<stop offset='0' stop-color='#0d0d12'/><stop offset='1' stop-color='#16151c'/>` +
+  `</linearGradient>` +
+  `<linearGradient id='beam' x1='0' y1='0' x2='0' y2='1'>` +
+  `<stop offset='0' stop-color='#cfe4ee' stop-opacity='.22'/>` +
+  `<stop offset='1' stop-color='#cfe4ee' stop-opacity='.04'/>` +
+  `</linearGradient>` +
+  `</defs>` +
+  `<rect width='340' height='300' fill='url(#void)'/>` +
+  // the spotlight cone
+  `<polygon points='158,0 182,0 292,248 48,248' fill='url(#beam)'/>` +
+  `<polygon points='163,0 177,0 240,248 100,248' fill='#dcedf5' opacity='.06'/>` +
+  // lit stage circle + soft cast shadows
+  `<ellipse cx='170' cy='258' rx='148' ry='32' fill='#94929a' opacity='.32'/>` +
+  `<ellipse cx='170' cy='254' rx='104' ry='23' fill='#c7c5cb' opacity='.26'/>` +
+  `<ellipse cx='118' cy='266' rx='58' ry='11' fill='#0a0a0e' opacity='.5'/>` +
+  `<ellipse cx='232' cy='268' rx='52' ry='10' fill='#0a0a0e' opacity='.45'/>` +
+  // mic booms (left tall, right short)
+  `<g stroke='#7e7c86' stroke-width='2' opacity='.75'>` +
+  `<line x1='58' y1='252' x2='58' y2='96'/><line x1='58' y1='96' x2='96' y2='120'/>` +
+  `<line x1='48' y1='252' x2='68' y2='252'/>` +
+  `<line x1='300' y1='250' x2='300' y2='150'/><line x1='300' y1='150' x2='276' y2='166'/>` +
   `</g>` +
-  // ride cymbal on a stand (top-left)
-  `<g opacity='.6'>` +
-  `<line x1='76' y1='92' x2='76' y2='160' stroke='#5d5378' stroke-width='3'/>` +
-  `<ellipse cx='76' cy='88' rx='38' ry='8' fill='#e8c25a' transform='rotate(-7 76 88)'/>` +
-  `<circle cx='76' cy='86' r='4' fill='#b8933c'/>` +
+  `<rect x='92' y='114' width='12' height='7' rx='3' fill='#9a98a2' transform='rotate(32 98 117)'/>` +
+  `<rect x='272' y='162' width='10' height='6' rx='3' fill='#9a98a2' transform='rotate(-35 277 165)'/>` +
+  // cymbal stands (thin hardware)
+  `<g stroke='#8a8892' stroke-width='2' opacity='.85'>` +
+  `<line x1='126' y1='252' x2='126' y2='148'/>` +
+  `<line x1='230' y1='250' x2='230' y2='142'/>` +
+  `<line x1='248' y1='252' x2='248' y2='168'/>` +
+  `<line x1='118' y1='252' x2='134' y2='252'/><line x1='222' y1='250' x2='238' y2='250'/>` +
   `</g>` +
-  // hi-hat (right)
-  `<g opacity='.55'>` +
-  `<line x1='268' y1='84' x2='268' y2='150' stroke='#5d5378' stroke-width='3'/>` +
-  `<ellipse cx='268' cy='76' rx='27' ry='6' fill='#e8c25a' transform='rotate(5 268 76)'/>` +
-  `<ellipse cx='268' cy='84' rx='27' ry='6' fill='#caa64d' transform='rotate(-4 268 84)'/>` +
+  // cymbals catching the light
+  `<ellipse cx='126' cy='146' rx='30' ry='5.5' fill='#e9cd7c' transform='rotate(-6 126 146)'/>` +
+  `<ellipse cx='126' cy='144' rx='30' ry='2.4' fill='#f7ecc0' opacity='.8' transform='rotate(-6 126 144)'/>` +
+  `<ellipse cx='230' cy='140' rx='27' ry='5' fill='#e9cd7c' transform='rotate(7 230 140)'/>` +
+  `<ellipse cx='230' cy='138' rx='27' ry='2.2' fill='#f7ecc0' opacity='.8' transform='rotate(7 230 138)'/>` +
+  `<ellipse cx='248' cy='166' rx='22' ry='4.4' fill='#d9b95e' transform='rotate(-5 248 166)'/>` +
+  // floor tom (left, amber wood)
+  `<g>` +
+  `<rect x='104' y='206' width='46' height='40' rx='5' fill='#a96a24'/>` +
+  `<rect x='104' y='206' width='46' height='40' rx='5' fill='#f3e2b6' opacity='.14'/>` +
+  `<ellipse cx='127' cy='206' rx='23' ry='7' fill='#ded5c2'/>` +
+  `<line x1='112' y1='246' x2='108' y2='258' stroke='#8a8892' stroke-width='2'/>` +
+  `<line x1='142' y1='246' x2='146' y2='258' stroke='#8a8892' stroke-width='2'/>` +
   `</g>` +
-  // kick drum (center-low) with hoop
-  `<g opacity='.6'>` +
-  `<circle cx='170' cy='226' r='40' fill='#332856'/>` +
-  `<circle cx='170' cy='226' r='40' fill='none' stroke='#7a5aa0' stroke-width='5'/>` +
-  `<circle cx='170' cy='226' r='27' fill='#241b3a' stroke='#8f7ec0' stroke-width='2'/>` +
-  `<circle cx='170' cy='226' r='5' fill='#e8c25a' opacity='.7'/>` +
+  // rack tom (small, above the kick)
+  `<g><rect x='176' y='176' width='38' height='26' rx='4' fill='#a96a24'/>` +
+  `<ellipse cx='195' cy='176' rx='19' ry='5.5' fill='#ded5c2'/></g>` +
+  // kick drum: wood hoop, dark head, glinting center
+  `<g>` +
+  `<circle cx='178' cy='224' r='35' fill='#2a251f'/>` +
+  `<circle cx='178' cy='224' r='35' fill='none' stroke='#b97a2e' stroke-width='6'/>` +
+  `<circle cx='178' cy='224' r='35' fill='none' stroke='#f3e2b6' stroke-width='1' opacity='.35'/>` +
+  `<circle cx='178' cy='224' r='9' fill='#cfc9bd' opacity='.85'/>` +
   `</g>` +
-  // snare drum (left-low)
-  `<g opacity='.55'>` +
-  `<rect x='22' y='224' width='58' height='22' rx='4' fill='#43356e'/>` +
-  `<ellipse cx='51' cy='224' rx='29' ry='8' fill='#d9d3e8'/>` +
-  `<ellipse cx='51' cy='246' rx='29' ry='7' fill='#332856'/>` +
-  `</g>` +
-  // crossed drumsticks (top-right low)
-  `<g stroke='#c9a86a' stroke-width='4' stroke-linecap='round' opacity='.6'>` +
-  `<line x1='288' y1='206' x2='330' y2='248'/><line x1='330' y1='206' x2='288' y2='248'/>` +
-  `</g>` +
-  `<circle cx='288' cy='206' r='4' fill='#e0c088' opacity='.6'/>` +
-  `<circle cx='330' cy='206' r='4' fill='#e0c088' opacity='.6'/>` +
-  // dim golden notes drifting
-  `<g font-family='Georgia, serif' font-weight='bold' opacity='.34' fill='#e8c25a'>` +
-  `<text x='140' y='66' font-size='22' transform='rotate(-8 140 66)'>&#9834;</text>` +
-  `<text x='196' y='96' font-size='18' transform='rotate(10 196 96)'>&#9835;</text>` +
-  `<text x='16' y='196' font-size='20' transform='rotate(8 16 196)'>&#9833;</text>` +
-  `<text x='308' y='180' font-size='18' transform='rotate(-10 308 180)'>&#9834;</text>` +
-  `<text x='236' y='286' font-size='20' transform='rotate(6 236 286)'>&#9835;</text>` +
-  `</g></svg>`;
+  // snare (left of kick, catching light)
+  `<g><rect x='142' y='198' width='34' height='14' rx='3' fill='#c8bfa8'/>` +
+  `<ellipse cx='159' cy='198' rx='17' ry='4.5' fill='#e9e2d0'/>` +
+  `<line x1='159' y1='212' x2='159' y2='250' stroke='#8a8892' stroke-width='2' opacity='.85'/></g>` +
+  `</svg>`;
 
-/** K-pop mode: BTS-style purplish blue with bokeh glow, purple hearts, neon notes. */
-export const MUSIC_BG_KPOP =
+/**
+ * Purple mode: a dreamy lavender sky — crescent moon, dark wispy cloud bands,
+ * puffy pink clouds below, and clusters of four-point sparkles. The wispy
+ * bands are symmetric ellipses wider than the tile, so left/right edges match
+ * and the tile repeats cleanly.
+ */
+export const MUSIC_BG_PURPLE =
   `<svg xmlns='http://www.w3.org/2000/svg' width='340' height='300' viewBox='0 0 340 300'>` +
-  `<defs><linearGradient id='bora' x1='0' y1='0' x2='1' y2='1'>` +
-  `<stop offset='0' stop-color='#2f2a72'/><stop offset='0.55' stop-color='#4a3a9c'/>` +
-  `<stop offset='1' stop-color='#6a4fc4'/></linearGradient></defs>` +
-  `<rect width='340' height='300' fill='url(#bora)'/>` +
-  // soft bokeh glow
-  `<g opacity='.2'>` +
-  `<circle cx='60' cy='60' r='34' fill='#b39df0'/><circle cx='300' cy='40' r='24' fill='#8fd3ff'/>` +
-  `<circle cx='230' cy='120' r='16' fill='#ff9fd0'/><circle cx='40' cy='210' r='22' fill='#8fd3ff'/>` +
-  `<circle cx='320' cy='230' r='30' fill='#b39df0'/><circle cx='150' cy='40' r='12' fill='#ff9fd0'/>` +
+  `<defs><linearGradient id='lav' x1='0' y1='0' x2='0' y2='1'>` +
+  `<stop offset='0' stop-color='#c7b6ef'/><stop offset='0.55' stop-color='#bdaae9'/>` +
+  `<stop offset='1' stop-color='#c9afe6'/></linearGradient></defs>` +
+  `<rect width='340' height='300' fill='url(#lav)'/>` +
+  // tiny far stars
+  `<g fill='#ffffff' opacity='.5'>` +
+  `<circle cx='210' cy='30' r='1.1'/><circle cx='268' cy='58' r='1.3'/><circle cx='36' cy='170' r='1'/>` +
+  `<circle cx='310' cy='120' r='1.2'/><circle cx='150' cy='96' r='1'/>` +
   `</g>` +
-  // purple hearts (borahae 💜) at different sizes/tilts
-  `<g fill='#c9a2f5' opacity='.55'>` +
-  `<path transform='translate(96 96) scale(2.2) rotate(-12)' d='M0 3 C0 .8 1.6 -.4 3 .9 C4.4 -.4 6 .8 6 3 C6 5 3 7.2 3 7.2 C3 7.2 0 5 0 3 Z'/>` +
-  `<path transform='translate(258 176) scale(1.7) rotate(10)' d='M0 3 C0 .8 1.6 -.4 3 .9 C4.4 -.4 6 .8 6 3 C6 5 3 7.2 3 7.2 C3 7.2 0 5 0 3 Z'/>` +
-  `<path transform='translate(36 268) scale(1.4) rotate(-8)' d='M0 3 C0 .8 1.6 -.4 3 .9 C4.4 -.4 6 .8 6 3 C6 5 3 7.2 3 7.2 C3 7.2 0 5 0 3 Z'/>` +
-  `<path transform='translate(196 250) scale(1.9) rotate(6)' d='M0 3 C0 .8 1.6 -.4 3 .9 C4.4 -.4 6 .8 6 3 C6 5 3 7.2 3 7.2 C3 7.2 0 5 0 3 Z'/>` +
+  // dark wispy cloud bands (span past both edges so the tile wraps)
+  `<g fill='#9c88d0'>` +
+  `<ellipse cx='170' cy='16' rx='230' ry='16' opacity='.5'/>` +
+  `<ellipse cx='60' cy='34' rx='120' ry='10' opacity='.35'/>` +
+  `<ellipse cx='290' cy='30' rx='110' ry='9' opacity='.35'/>` +
+  `<ellipse cx='170' cy='140' rx='240' ry='13' opacity='.4'/>` +
+  `<ellipse cx='250' cy='128' rx='120' ry='8' opacity='.3'/>` +
   `</g>` +
-  // neon wavy line with glowing notes (seamless: period 85)
-  `<g stroke='#8fd3ff' stroke-width='2' fill='none' opacity='.35'>` +
-  `<path d='M0 160 Q 21 148, 42.5 160 T 85 160 T 127.5 160 T 170 160 T 212.5 160 T 255 160 T 297.5 160 T 340 160'/>` +
+  // crescent moon with soft glow (top-left, like the reference)
+  `<g><circle cx='95' cy='76' r='42' fill='#ffffff' opacity='.14'/>` +
+  `<circle cx='95' cy='76' r='33' fill='#f5f0fc' opacity='.95'/>` +
+  `<circle cx='109' cy='68' r='29' fill='#c4b2ec'/>` +
   `</g>` +
-  `<g font-family='Georgia, serif' font-weight='bold' opacity='.75'>` +
-  `<text x='30' y='168' font-size='24' fill='#ff9fd0' transform='rotate(-9 30 168)'>&#9834;</text>` +
-  `<text x='122' y='152' font-size='27' fill='#8fd3ff' transform='rotate(8 122 152)'>&#9835;</text>` +
-  `<text x='208' y='170' font-size='23' fill='#ffffff' transform='rotate(-6 208 170)'>&#9833;</text>` +
-  `<text x='288' y='150' font-size='25' fill='#c9a2f5' transform='rotate(9 288 150)'>&#9834;</text>` +
+  // puffy pink clouds (lower half)
+  `<g fill='#f2c8e0' opacity='.85'>` +
+  `<ellipse cx='210' cy='240' rx='85' ry='38'/><ellipse cx='150' cy='258' rx='60' ry='28'/>` +
+  `<ellipse cx='272' cy='260' rx='58' ry='30'/><ellipse cx='236' cy='210' rx='42' ry='22'/>` +
   `</g>` +
-  // sparkles
-  `<g fill='#ffffff' opacity='.55' font-size='13' font-family='Georgia, serif'>` +
-  `<text x='150' y='210'>&#10022;</text><text x='72' y='138'>&#10023;</text>` +
-  `<text x='306' y='96'>&#10022;</text><text x='232' y='58'>&#10023;</text>` +
-  `<text x='120' y='288'>&#10022;</text>` +
+  `<g fill='#f8d8ea' opacity='.8'>` +
+  `<ellipse cx='196' cy='222' rx='40' ry='18'/><ellipse cx='252' cy='236' rx='34' ry='16'/>` +
+  `<ellipse cx='58' cy='282' rx='52' ry='20'/>` +
+  `</g>` +
+  // darker wisps hugging the cloud tops
+  `<g fill='#a48ad6' opacity='.45'>` +
+  `<ellipse cx='170' cy='196' rx='150' ry='9'/><ellipse cx='60' cy='256' rx='80' ry='8'/>` +
+  `</g>` +
+  // four-point sparkles, clustered like the reference
+  `<g fill='#ffffff'>` +
+  `<path transform='translate(262 196)' d='M0 -9 L1.8 -1.8 L9 0 L1.8 1.8 L0 9 L-1.8 1.8 L-9 0 L-1.8 -1.8 Z' opacity='.95'/>` +
+  `<path transform='translate(286 216) scale(.7)' d='M0 -9 L1.8 -1.8 L9 0 L1.8 1.8 L0 9 L-1.8 1.8 L-9 0 L-1.8 -1.8 Z' opacity='.85'/>` +
+  `<path transform='translate(300 178) scale(.5)' d='M0 -9 L1.8 -1.8 L9 0 L1.8 1.8 L0 9 L-1.8 1.8 L-9 0 L-1.8 -1.8 Z' opacity='.8'/>` +
+  `<path transform='translate(274 244) scale(.45)' d='M0 -9 L1.8 -1.8 L9 0 L1.8 1.8 L0 9 L-1.8 1.8 L-9 0 L-1.8 -1.8 Z' opacity='.7'/>` +
+  `<path transform='translate(160 182) scale(.6)' d='M0 -9 L1.8 -1.8 L9 0 L1.8 1.8 L0 9 L-1.8 1.8 L-9 0 L-1.8 -1.8 Z' opacity='.8'/>` +
+  `<path transform='translate(142 200) scale(.4)' d='M0 -9 L1.8 -1.8 L9 0 L1.8 1.8 L0 9 L-1.8 1.8 L-9 0 L-1.8 -1.8 Z' opacity='.7'/>` +
+  `<circle cx='250' cy='186' r='1.4' opacity='.9'/><circle cx='294' cy='200' r='1.2' opacity='.8'/>` +
+  `<circle cx='172' cy='192' r='1.2' opacity='.8'/><circle cx='310' cy='236' r='1.1' opacity='.7'/>` +
   `</g></svg>`;
