@@ -52,7 +52,8 @@ interface MusicJob {
   state: 'working' | 'done' | 'blocked' | 'failed';
   /** Friendly message for blocked/failed states. */
   message?: string;
-  track?: Track;
+  /** The finished songs (Suno-style APIs return two takes per generation). */
+  tracks?: Track[];
   createdAt: number;
 }
 
@@ -93,36 +94,45 @@ function runJob(job: MusicJob, taskId: string, meta: {
           logger.warn('music generation failed upstream', { taskId, error: status.error });
           return;
         }
-        // Succeeded: take the first clip.
-        const clip = status.clips[0]!;
-
-        // Output moderation: the model's title and lyrics face the child.
-        const verdict = await guardText([clip.title, clip.lyrics], 'output');
-        if (!verdict.allowed) {
+        // Succeeded: the API returns up to two takes of the song. Each take is
+        // output-moderated on its own (title + lyrics face the child) — one
+        // bad take shouldn't sink its sibling.
+        const tracks: Track[] = [];
+        let blockedMessage = '';
+        for (const clip of status.clips.slice(0, 2)) {
+          const verdict = await guardText([clip.title, clip.lyrics], 'output');
+          if (!verdict.allowed) {
+            blockedMessage =
+              verdict.childMessage || "Let's try a different idea — keep it friendly and safe!";
+            logger.warn('music take blocked on output', { taskId, categories: verdict.categories });
+            continue;
+          }
+          const audio = await downloadAudio(clip.audioUrl);
+          tracks.push(
+            await createTrack(
+              {
+                title: (clip.title || meta.prompt || 'My song').slice(0, 120),
+                owner: job.owner,
+                prompt: meta.prompt,
+                ...(meta.style ? { style: meta.style } : {}),
+                ...(meta.mood ? { mood: meta.mood } : {}),
+                instrumental: meta.instrumental,
+                ...(clip.lyrics && !meta.instrumental ? { lyrics: clip.lyrics.slice(0, 4000) } : {}),
+                mimeType: audio.mimeType,
+                ...(clip.durationSec ? { durationSec: clip.durationSec } : {}),
+              },
+              audio.bytes,
+            ),
+          );
+        }
+        if (!tracks.length) {
           job.state = 'blocked';
-          job.message = verdict.childMessage || "Let's try a different idea — keep it friendly and safe!";
-          logger.warn('music blocked on output', { taskId, categories: verdict.categories });
+          job.message = blockedMessage || "Let's try a different idea — keep it friendly and safe!";
           return;
         }
-
-        const audio = await downloadAudio(clip.audioUrl);
-        const track = await createTrack(
-          {
-            title: (clip.title || meta.prompt || 'My song').slice(0, 120),
-            owner: job.owner,
-            prompt: meta.prompt,
-            ...(meta.style ? { style: meta.style } : {}),
-            ...(meta.mood ? { mood: meta.mood } : {}),
-            instrumental: meta.instrumental,
-            ...(clip.lyrics && !meta.instrumental ? { lyrics: clip.lyrics.slice(0, 4000) } : {}),
-            mimeType: audio.mimeType,
-            ...(clip.durationSec ? { durationSec: clip.durationSec } : {}),
-          },
-          audio.bytes,
-        );
-        job.track = track;
+        job.tracks = tracks;
         job.state = 'done';
-        logger.info('music generated', { taskId, trackId: track.id, bytes: audio.bytes.length });
+        logger.info('music generated', { taskId, trackIds: tracks.map((t) => t.id) });
         return;
       }
     } catch (err) {
@@ -214,7 +224,7 @@ musicApiRouter.get('/job/:id', (req: Request, res: Response) => {
     ok: true,
     state: job.state,
     ...(job.message ? { message: job.message } : {}),
-    ...(job.track ? { track: publicTrack(job.track) } : {}),
+    ...(job.tracks ? { tracks: job.tracks.map(publicTrack) } : {}),
   });
 });
 

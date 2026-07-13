@@ -100,6 +100,7 @@ const MUSIC_CSS = `<style>
   .result { margin-top: 18px; border: 1px solid #dceaf0; background: #f7fbfd;
     border-radius: 14px; padding: 16px; }
   .result h3 { margin: 0 0 4px; font-size: 17px; }
+  .songcard.another { border-top: 1px dashed #c4d3da; margin-top: 16px; padding-top: 14px; }
   .result .meta { font-size: 12.5px; color: #5a7785; margin-bottom: 10px; }
   .result audio, .trackrow audio { width: 100%; margin-top: 6px; }
   .result .actions { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
@@ -289,8 +290,10 @@ function musicClientJs(): string {
         workingEl.hidden = true;
         genBtn.disabled = false;
         if (data.state === 'done') {
-          showResult(data.track);
-          setStatus('Your song is ready! 🎉');
+          showResult(data.tracks || []);
+          setStatus((data.tracks && data.tracks.length > 1)
+            ? 'Two songs came out — listen to both and keep your favorite (or both)! 🎉'
+            : 'Your song is ready! 🎉');
         } else {
           setStatus(data.message || 'The music maker had trouble — try again!', data.state === 'blocked' ? 'blocked' : 'error');
         }
@@ -312,41 +315,53 @@ function musicClientJs(): string {
     return bits.join(' · ');
   }
 
-  function showResult(track) {
+  // The API returns up to two takes: show each as "Song 1" / "Song 2" with its
+  // own player and Save/Publish buttons. Only the first one auto-plays.
+  function showResult(tracks) {
     resultEl.innerHTML = '';
     resultEl.hidden = false;
-    const h = document.createElement('h3');
-    h.textContent = '🎵 ' + track.title;
-    resultEl.appendChild(h);
-    const meta = document.createElement('div');
-    meta.className = 'meta';
-    meta.textContent = trackMeta(track);
-    resultEl.appendChild(meta);
-    const audio = document.createElement('audio');
-    audio.controls = true;
-    audio.autoplay = true;
-    audio.src = '/v1/music/' + track.id + '/audio';
-    resultEl.appendChild(audio);
-    audio.play().catch(function () {});
-    if (track.lyrics) {
-      const ly = document.createElement('div');
-      ly.className = 'lyrics';
-      ly.textContent = track.lyrics;
-      resultEl.appendChild(ly);
-    }
-    const actions = document.createElement('div');
-    actions.className = 'actions';
-    const save = document.createElement('button');
-    save.className = 'cta';
-    save.textContent = '💾 Save to My music';
-    const pub = document.createElement('button');
-    pub.className = 'cta publish';
-    pub.textContent = '📻 Publish to the library';
-    actions.appendChild(save); actions.appendChild(pub);
-    resultEl.appendChild(actions);
-
-    save.addEventListener('click', function () { finishTrack(track.id, 'keep', save, pub); });
-    pub.addEventListener('click', function () { finishTrack(track.id, 'publish', save, pub); });
+    tracks.forEach(function (track, i) {
+      const card = document.createElement('div');
+      card.className = 'songcard' + (i > 0 ? ' another' : '');
+      const h = document.createElement('h3');
+      h.textContent = tracks.length > 1
+        ? '🎵 Song ' + (i + 1) + ' — ' + track.title
+        : '🎵 ' + track.title;
+      card.appendChild(h);
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = trackMeta(track);
+      card.appendChild(meta);
+      const audio = document.createElement('audio');
+      audio.controls = true;
+      audio.src = '/v1/music/' + track.id + '/audio';
+      if (i === 0) {
+        audio.autoplay = true;
+        audio.play().catch(function () {});
+      } else {
+        audio.preload = 'none';
+      }
+      card.appendChild(audio);
+      if (track.lyrics) {
+        const ly = document.createElement('div');
+        ly.className = 'lyrics';
+        ly.textContent = track.lyrics;
+        card.appendChild(ly);
+      }
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+      const save = document.createElement('button');
+      save.className = 'cta';
+      save.textContent = '💾 Save to My music';
+      const pub = document.createElement('button');
+      pub.className = 'cta publish';
+      pub.textContent = '📻 Publish to the library';
+      actions.appendChild(save); actions.appendChild(pub);
+      card.appendChild(actions);
+      save.addEventListener('click', function () { finishTrack(track.id, 'keep', save, pub); });
+      pub.addEventListener('click', function () { finishTrack(track.id, 'publish', save, pub); });
+      resultEl.appendChild(card);
+    });
   }
 
   async function finishTrack(id, action, save, pub) {
