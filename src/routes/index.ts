@@ -7,10 +7,11 @@ import { geminiProvider } from '../providers/gemini.js';
 import { geminiTtsProvider } from '../providers/geminiTts.js';
 import { replicateProvider } from '../providers/replicate.js';
 import { storyImageProvider } from '../providers/imageProvider.js';
-import { sunoProvider } from '../providers/suno.js';
+import { aiMusicConfigured } from '../providers/aiMusic.js';
 import { runGuardedGeneration } from '../safety/guardedGeneration.js';
 import { config } from '../config.js';
 import { booksApiRouter, libraryApiRouter } from './books.js';
+import { musicApiRouter } from './musicTracks.js';
 import {
   optionalBoolean,
   optionalString,
@@ -27,7 +28,7 @@ router.get('/health', (_req: Request, res: Response) => {
     moderation: { model: config.moderation.model, failClosed: config.moderation.failClosed },
     storyImage: config.storyImage.provider,
     providers: {
-      suno: sunoProvider.isConfigured(),
+      aiMusic: aiMusicConfigured(),
       elevenlabs: elevenLabsProvider.isConfigured(),
       gemini: geminiProvider.isConfigured(),
       replicate: replicateProvider.isConfigured(),
@@ -45,19 +46,8 @@ router.use('/v1/books', booksApiRouter);
 // Published books, browsable by everyone signed in.
 router.use('/v1/library', libraryApiRouter);
 
-// --- Music: Suno ------------------------------------------------------------
-router.post(
-  '/v1/music',
-  asyncHandler(async (req, res) => {
-    const reqBody = {
-      prompt: requireString(req.body, 'prompt'),
-      style: optionalString(req.body, 'style', { maxLength: 200 }),
-      instrumental: optionalBoolean(req.body, 'instrumental'),
-    };
-    const outcome = await runGuardedGeneration(sunoProvider, reqBody);
-    res.status(outcome.status).json(outcome.body);
-  }),
-);
+// --- Music maker: AIMusicAPI song generation + My music / library -------------
+router.use('/v1/music', musicApiRouter);
 
 // --- Voice: ElevenLabs ------------------------------------------------------
 router.post(

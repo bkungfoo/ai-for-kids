@@ -157,6 +157,14 @@ export const config = {
       apiKey: str('SUNO_API_KEY'),
       baseUrl: str('SUNO_BASE_URL', 'https://api.suno.ai'),
     },
+    // AIMusicAPI (the musicapi.ai family) — Suno-style song generation for the
+    // kids' music maker. Async API: submit a task, poll until succeeded.
+    aiMusic: {
+      apiKey: str('AIMUSICAPI_KEY'),
+      baseUrl: str('AIMUSICAPI_BASE_URL', 'https://api.aimusicapi.ai'),
+      // Model version ("mv"): sonic-v3-5 … sonic-v5-5.
+      model: str('AIMUSIC_MODEL', 'sonic-v4-5'),
+    },
     elevenlabs: {
       apiKey: str('ELEVENLABS_API_KEY'),
       baseUrl: str('ELEVENLABS_BASE_URL', 'https://api.elevenlabs.io'),

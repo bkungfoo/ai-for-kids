@@ -3,6 +3,7 @@ import { config } from './config.js';
 import { concurrencyLimiter } from './middleware/concurrency.js';
 import { errorHandler, notFound } from './middleware/errorHandler.js';
 import { authRouter } from './routes/auth.js';
+import { musicPagesRouter } from './routes/musicPages.js';
 import { pagesRouter } from './routes/pages.js';
 import { reviewRouter } from './routes/review.js';
 import { router } from './routes/index.js';
@@ -31,6 +32,9 @@ export function createServer(): Express {
   app.use(reviewRouter);
   // Authenticated browser pages (landing hub + per-tool pages).
   app.use(pagesRouter);
+  // Music maker page. Mounted after pagesRouter, which holds the
+  // requirePageAuth guard for /music.
+  app.use(musicPagesRouter);
   // JSON generation API (/v1/*) and health.
   app.use(router);
 

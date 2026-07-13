@@ -27,7 +27,7 @@ interface Feature {
 
 const FEATURES: Feature[] = [
   { href: '/books', icon: '📖', title: 'Storybooks', blurb: 'Read, write, and use AI to illustrate storybooks', ready: true },
-  { href: '/music', icon: '🎵', title: 'Music', blurb: 'Compose a song', ready: false },
+  { href: '/music', icon: '🎵', title: 'Music', blurb: 'Make a song with AI', ready: true },
   { href: '/voice', icon: '🎙️', title: 'Voices', blurb: 'Turn words into speech', ready: false },
   { href: '/code', icon: '💻', title: 'Coding', blurb: 'Build something with code', ready: false },
 ];
@@ -86,7 +86,7 @@ const LIBRARY_MODE_CSS = `<style>
 </style>`;
 
 /** Shared page shell: Harbor House styling + header with sign-out. */
-function shell(opts: {
+export function shell(opts: {
   title: string;
   /** true = "← Home"; or a custom destination for the top-left link. */
   back?: boolean | { href: string; label: string };
@@ -2458,6 +2458,6 @@ function comingSoon(icon: string, name: string): string {
   });
 }
 
-pagesRouter.get('/music', (_req, res) => res.type('html').send(comingSoon('🎵', 'Music')));
+// (/music is served by musicPagesRouter — see routes/musicPages.ts.)
 pagesRouter.get('/voice', (_req, res) => res.type('html').send(comingSoon('🎙️', 'Voices')));
 pagesRouter.get('/code', (_req, res) => res.type('html').send(comingSoon('💻', 'Coding')));
