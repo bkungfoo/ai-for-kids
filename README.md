@@ -244,7 +244,11 @@ are derived entirely from the book.
 
 ## Music maker
 
-`/music` lets kids generate songs: optional **style** buttons (pop, jazz, R&B,
+`/music` is a hub like Storybooks — **Make new song** (`/music/new`),
+**My music** (`/music/mine`) and **Browse the library** (`/music/library`) —
+and every music page carries a background-mode picker (Light / Dark /
+Purple, remembered per browser) that themes the whole card IDE-style. The
+maker lets kids generate songs: optional **style** buttons (pop, jazz, R&B,
 K-pop, classical, EDM, rock, metal, video game, lo-fi), optional **mood**
 buttons (lively, happy, chill, dreamy, melancholy, angry, epic, silly), a
 **words vs instrumental** toggle, and a free-text idea box. Every generation

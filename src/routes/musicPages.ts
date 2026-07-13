@@ -5,21 +5,17 @@ import { MUSIC_BG_BRIGHT, MUSIC_BG_DARK, MUSIC_BG_PURPLE } from './wallpapers.js
 import { shell } from './pages.js';
 
 /**
- * The kids' music maker page: pick a style and a mood (optional), choose
- * words vs instrumental, add your own idea, hit "Generate music". The song
- * plays in a small audio player when ready, and can be saved to "My music"
- * or published to the shared music library — both shown on this same page.
+ * The music section, structured like Storybooks: a hub (/music) with three
+ * tiles — Make new song, My music, Browse the library — plus the pages
+ * behind them. Every page carries the background-mode picker (Light / Dark /
+ * Purple), remembered per browser, and the whole UI themes with the mode.
  */
 export const musicPagesRouter = Router();
 
-musicPagesRouter.get('/music', requirePageAuth);
+for (const path of ['/music', '/music/new', '/music/mine', '/music/library']) {
+  musicPagesRouter.get(path, requirePageAuth);
+}
 
-/**
- * Three background modes, switchable on the page (persisted per browser):
- * bright (default, sunny staves), dark (a drum kit under a stage spotlight),
- * and purple (dreamy lavender sky: crescent moon, pink clouds, sparkles).
- * Plain <body> is bright; the picker sets body.bg-dark / body.bg-purple.
- */
 const MUSIC_MODE_CSS = `<style>
   /* Theme variables per background mode — the card ("dialog box"), chips,
      inputs and panels all read from these, VSCode-style. */
@@ -136,9 +132,220 @@ const MUSIC_CSS = `<style>
   .bg-label { font-size: 11.5px; font-weight: 800; color: var(--muted); text-transform: uppercase;
     letter-spacing: .5px; }
   .chip.mini { padding: 4px 9px; font-size: 12px; border-width: 2px; }
+  /* Hub tiles (like the Storybooks hub), themed with the mode. */
+  .mtiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  @media (max-width: 620px) { .mtiles { grid-template-columns: 1fr; } }
+  .mtile { display: flex; flex-direction: column; gap: 4px; padding: 22px; border-radius: 14px;
+    text-decoration: none; color: var(--fg); background: var(--chip-bg);
+    border: 1px solid var(--chip-border); transition: transform .08s, box-shadow .12s; }
+  .mtile:hover { transform: translateY(-2px); box-shadow: 0 10px 22px var(--card-shadow); }
+  .mtile-icon { font-size: 34px; }
+  .mtile-title { font-weight: 700; font-size: 18px; }
+  .mtile-blurb { font-size: 14px; color: var(--muted); }
 </style>`;
 
+/** The background-mode picker, shown top-right of the card on every page. */
+const BG_MODES_HTML = `<div class="bgmodes" id="bgmodes" title="Change the background">
+  <span class="bg-label">Background:</span>
+  <button type="button" class="chip mini" data-bg="bright">☀️ Light</button>
+  <button type="button" class="chip mini" data-bg="dark">🥁 Dark</button>
+  <button type="button" class="chip mini" data-bg="purple">🌙 Purple</button>
+</div>`;
+
+/** Shared client helpers: theming, errors, status, and track rows. */
+function musicSharedJs(): string {
+  return `
+  function friendlyError(res, data) {
+    if (data && data.code === 'credits_exhausted') {
+      return { text: '🪫 ' + (data.error || 'The AI credits have run out — ask a grown-up to top up the account.'), cls: 'error' };
+    }
+    if (res.status === 403 && data && data.blocked) {
+      return { text: data.message || "Let's try a different idea — keep it friendly and safe!", cls: 'blocked' };
+    }
+    if (res.status === 401) return { text: 'Your session ended. <a href="/login">Sign in again</a>.', cls: 'error' };
+    if (res.status === 400 && data && data.error) return { text: data.error, cls: 'blocked' };
+    if (res.status === 501) return { text: "The music maker isn't set up yet. Ask a grown-up to add the key.", cls: 'error' };
+    if (res.status === 503) return { text: 'Lots of people are creating right now — please try again in a moment.', cls: 'error' };
+    return { text: 'Something went wrong. Please try again.', cls: 'error' };
+  }
+
+  const statusEl = document.getElementById('status');
+  function setStatus(text, cls) {
+    if (!statusEl) return;
+    statusEl.className = 'status' + (cls ? ' ' + cls : '');
+    statusEl.innerHTML = text;
+  }
+
+  // Background modes: bright/light (default) / dark / purple, remembered.
+  function applyBg(mode) {
+    if (mode === 'kpop') mode = 'purple'; // legacy saved value
+    document.body.className = mode === 'dark' ? 'bg-dark' : mode === 'purple' ? 'bg-purple' : '';
+    document.querySelectorAll('#bgmodes .chip').forEach(function (c) {
+      c.classList.toggle('on', c.dataset.bg === mode);
+    });
+    try { localStorage.setItem('hh-music-bg', mode); } catch {}
+  }
+  document.querySelectorAll('#bgmodes .chip').forEach(function (c) {
+    c.addEventListener('click', function () { applyBg(c.dataset.bg); });
+  });
+  (function () {
+    let saved = 'bright';
+    try { saved = localStorage.getItem('hh-music-bg') || 'bright'; } catch {}
+    applyBg(saved);
+  })();
+
+  function trackMeta(t) {
+    const bits = [];
+    if (t.style) bits.push(t.style);
+    if (t.mood) bits.push(t.mood);
+    bits.push(t.instrumental ? 'instrumental' : 'with words');
+    return bits.join(' · ');
+  }
+
+  function trackRow(t, mineShelf, onChanged) {
+    const row = document.createElement('div');
+    row.className = 'trackrow';
+    const title = document.createElement('div');
+    title.className = 't-title';
+    title.textContent = '🎵 ' + t.title;
+    if (mineShelf && t.status === 'published') {
+      const b = document.createElement('span');
+      b.className = 'pubbadge';
+      b.textContent = '📻 In the library';
+      title.appendChild(b);
+    }
+    row.appendChild(title);
+    const meta = document.createElement('div');
+    meta.className = 't-meta';
+    meta.textContent = trackMeta(t);
+    row.appendChild(meta);
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.preload = 'none';
+    audio.src = '/v1/music/' + t.id + '/audio';
+    row.appendChild(audio);
+    if (mineShelf) {
+      const actions = document.createElement('div');
+      actions.className = 't-actions';
+      const pubBtn = document.createElement('button');
+      pubBtn.className = 'linkbtn';
+      pubBtn.textContent = t.status === 'published' ? '📤 Pull it off the library' : '📻 Publish to the library';
+      pubBtn.addEventListener('click', async function () {
+        await fetch('/v1/music/' + t.id + '/' + (t.status === 'published' ? 'unpublish' : 'publish'), { method: 'POST' });
+        onChanged();
+      });
+      actions.appendChild(pubBtn);
+      const del = document.createElement('button');
+      del.className = 'linkbtn danger';
+      del.textContent = '🗑️ Delete';
+      del.addEventListener('click', async function () {
+        if (!confirm('Delete "' + t.title + '"? This cannot be undone.')) return;
+        await fetch('/v1/music/' + t.id, { method: 'DELETE' });
+        onChanged();
+      });
+      actions.appendChild(del);
+      row.appendChild(actions);
+    }
+    return row;
+  }
+
+  async function fillShelf(url, boxId, mineShelf, emptyHtml, onChanged) {
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!data.ok) return;
+      const box = document.getElementById(boxId);
+      box.innerHTML = '';
+      if (!data.tracks.length) {
+        const p = document.createElement('p');
+        p.className = 'empty';
+        p.innerHTML = emptyHtml;
+        box.appendChild(p);
+        return;
+      }
+      for (const t of data.tracks) box.appendChild(trackRow(t, mineShelf, onChanged));
+    } catch {}
+  }
+  `;
+}
+
+// --- Hub: three tiles, like the Storybooks hub ----------------------------------
 musicPagesRouter.get('/music', (_req: Request, res: Response) => {
+  res.type('html').send(
+    shell({
+      title: 'Music — Harbor House',
+      back: true,
+      body: `<div class="card">
+        ${BG_MODES_HTML}
+        <h1>🎵 Music</h1>
+        <p class="sub">Make songs with AI, keep your favorites, and share them in the library.</p>
+        <div class="mtiles">
+          <a class="mtile" href="/music/new">
+            <span class="mtile-icon" aria-hidden="true">✨</span>
+            <span class="mtile-title">Make new song</span>
+            <span class="mtile-blurb">Pick a style and a mood, and let the music maker sing</span>
+          </a>
+          <a class="mtile" href="/music/mine">
+            <span class="mtile-icon" aria-hidden="true">💿</span>
+            <span class="mtile-title">My music</span>
+            <span class="mtile-blurb">Listen to the songs you saved</span>
+          </a>
+          <a class="mtile" href="/music/library">
+            <span class="mtile-icon" aria-hidden="true">📻</span>
+            <span class="mtile-title">Browse the library</span>
+            <span class="mtile-blurb">Hear the songs everyone published</span>
+          </a>
+        </div>
+      </div>`,
+      head: MUSIC_MODE_CSS + MUSIC_CSS,
+    }) + `<script>${musicSharedJs()}</script>`,
+  );
+});
+
+// --- My music --------------------------------------------------------------------
+musicPagesRouter.get('/music/mine', (_req: Request, res: Response) => {
+  res.type('html').send(
+    shell({
+      title: 'My music — Harbor House',
+      back: { href: '/music', label: 'Music' },
+      body: `<div class="card">
+        ${BG_MODES_HTML}
+        <h1>💿 My music</h1>
+        <p class="sub">Your saved songs — or <a href="/music/new">✨ make a new one</a>.</p>
+        <div id="mymusic"></div>
+        <div id="status" class="status" role="status" aria-live="polite"></div>
+      </div>`,
+      head: MUSIC_MODE_CSS + MUSIC_CSS,
+    }) + `<script>${musicSharedJs()}
+      function reload() { fillShelf('/v1/music', 'mymusic', true, 'Nothing saved yet — <a href="/music/new">make your first song!</a>', reload); }
+      reload();
+    </script>`,
+  );
+});
+
+// --- The music library -------------------------------------------------------------
+musicPagesRouter.get('/music/library', (_req: Request, res: Response) => {
+  res.type('html').send(
+    shell({
+      title: 'Music library — Harbor House',
+      back: { href: '/music', label: 'Music' },
+      body: `<div class="card">
+        ${BG_MODES_HTML}
+        <h1>📻 Music library</h1>
+        <p class="sub">Songs our musicians published. Want to add yours?
+          <a href="/music/new">✨ Make a new song</a>.</p>
+        <div id="library"></div>
+        <div id="status" class="status" role="status" aria-live="polite"></div>
+      </div>`,
+      head: MUSIC_MODE_CSS + MUSIC_CSS,
+    }) + `<script>${musicSharedJs()}
+      fillShelf('/v1/music/library', 'library', false, 'The library is quiet — <a href="/music/new">publish the first song!</a>', function () {});
+    </script>`,
+  );
+});
+
+// --- Make new song -----------------------------------------------------------------
+musicPagesRouter.get('/music/new', (_req: Request, res: Response) => {
   const styleChips = MUSIC_STYLES.map(
     (s) => `<button type="button" class="chip" data-kind="style" data-id="${s.id}">${s.icon} ${s.label}</button>`,
   ).join('');
@@ -148,16 +355,11 @@ musicPagesRouter.get('/music', (_req: Request, res: Response) => {
 
   res.type('html').send(
     shell({
-      title: 'Music — Harbor House',
-      back: true,
+      title: 'Make new song — Harbor House',
+      back: { href: '/music', label: 'Music' },
       body: `<div class="card">
-        <div class="bgmodes" id="bgmodes" title="Change the background">
-          <span class="bg-label">Background:</span>
-          <button type="button" class="chip mini" data-bg="bright">☀️ Bright</button>
-          <button type="button" class="chip mini" data-bg="dark">🥁 Dark</button>
-          <button type="button" class="chip mini" data-bg="purple">🌙 Purple</button>
-        </div>
-        <h1>🎵 Make music</h1>
+        ${BG_MODES_HTML}
+        <h1>✨ Make new song</h1>
         <p class="sub">Pick a style and a mood, add your own idea — then let the music maker sing!</p>
 
         <span class="group-label">Style <span class="group-hint">(optional — tap to choose, tap again to clear)</span></span>
@@ -183,58 +385,14 @@ musicPagesRouter.get('/music', (_req: Request, res: Response) => {
         </div>
         <div id="result" class="result" hidden></div>
         <div id="status" class="status" role="status" aria-live="polite"></div>
-
-        <h2 class="shelfhead">💿 My music</h2>
-        <div id="mymusic"></div>
-
-        <h2 class="shelfhead">📻 Music library <span class="group-hint">(songs everyone published)</span></h2>
-        <div id="library"></div>
       </div>`,
       head: MUSIC_MODE_CSS + MUSIC_CSS,
-    }) + `<script>${musicClientJs()}</script>`,
+    }) + `<script>${musicSharedJs()}${makerClientJs()}</script>`,
   );
 });
 
-function musicClientJs(): string {
+function makerClientJs(): string {
   return `
-  function friendlyError(res, data) {
-    if (data && data.code === 'credits_exhausted') {
-      return { text: '🪫 ' + (data.error || 'The AI credits have run out — ask a grown-up to top up the account.'), cls: 'error' };
-    }
-    if (res.status === 403 && data && data.blocked) {
-      return { text: data.message || "Let's try a different idea — keep it friendly and safe!", cls: 'blocked' };
-    }
-    if (res.status === 401) return { text: 'Your session ended. <a href="/login">Sign in again</a>.', cls: 'error' };
-    if (res.status === 400 && data && data.error) return { text: data.error, cls: 'blocked' };
-    if (res.status === 501) return { text: "The music maker isn't set up yet. Ask a grown-up to add the key.", cls: 'error' };
-    if (res.status === 503) return { text: 'Lots of people are creating right now — please try again in a moment.', cls: 'error' };
-    return { text: 'Something went wrong. Please try again.', cls: 'error' };
-  }
-
-  const statusEl = document.getElementById('status');
-  function setStatus(text, cls) {
-    statusEl.className = 'status' + (cls ? ' ' + cls : '');
-    statusEl.innerHTML = text;
-  }
-
-  // --- background modes: bright (default) / dark / kpop, remembered ----------
-  function applyBg(mode) {
-    if (mode === 'kpop') mode = 'purple'; // renamed; migrate old saved choice
-    document.body.className = mode === 'dark' ? 'bg-dark' : mode === 'purple' ? 'bg-purple' : '';
-    document.querySelectorAll('#bgmodes .chip').forEach(function (c) {
-      c.classList.toggle('on', c.dataset.bg === mode);
-    });
-    try { localStorage.setItem('hh-music-bg', mode); } catch {}
-  }
-  document.querySelectorAll('#bgmodes .chip').forEach(function (c) {
-    c.addEventListener('click', function () { applyBg(c.dataset.bg); });
-  });
-  (function () {
-    let saved = 'bright';
-    try { saved = localStorage.getItem('hh-music-bg') || 'bright'; } catch {}
-    applyBg(saved);
-  })();
-
   // --- pickers: style + mood single-select (toggle off on second tap) --------
   let styleId = null, moodId = null, instrumental = false;
   function wireChips(boxId, onPick) {
@@ -250,7 +408,6 @@ function musicClientJs(): string {
   }
   wireChips('styles', function (id) { styleId = id; });
   wireChips('moods', function (id) { moodId = id; });
-  // vocals: always exactly one on
   document.querySelectorAll('#vocals .chip').forEach(function (chip) {
     chip.addEventListener('click', function () {
       document.querySelectorAll('#vocals .chip').forEach(function (c) { c.classList.remove('on'); });
@@ -343,17 +500,7 @@ function musicClientJs(): string {
     }, 4000);
   }
 
-  // --- result player + save/publish ---------------------------------------------
-  function trackMeta(t) {
-    const bits = [];
-    if (t.style) bits.push(t.style);
-    if (t.mood) bits.push(t.mood);
-    bits.push(t.instrumental ? 'instrumental' : 'with words');
-    return bits.join(' · ');
-  }
-
-  // The API returns up to two takes: show each as "Song 1" / "Song 2" with its
-  // own player and Save/Publish buttons. Only the first one auto-plays.
+  // --- result players + save/publish ---------------------------------------------
   function showResult(tracks) {
     resultEl.innerHTML = '';
     resultEl.hidden = false;
@@ -407,8 +554,9 @@ function musicClientJs(): string {
       const res = await fetch('/v1/music/' + id + '/' + action, { method: 'POST' });
       const data = await res.json().catch(function () { return {}; });
       if (res.ok && data.ok) {
-        setStatus(action === 'publish' ? 'Published! Everyone can hear it in the library. 📻' : 'Saved to My music! 💾');
-        loadShelves();
+        setStatus(action === 'publish'
+          ? 'Published! Hear it in the <a href="/music/library">📻 library</a>.'
+          : 'Saved! Find it in <a href="/music/mine">💿 My music</a>.');
         return;
       }
       const f = friendlyError(res, data);
@@ -419,77 +567,6 @@ function musicClientJs(): string {
       save.disabled = false; pub.disabled = false;
     }
   }
-
-  // --- shelves -----------------------------------------------------------------
-  function trackRow(t, mineShelf) {
-    const row = document.createElement('div');
-    row.className = 'trackrow';
-    const title = document.createElement('div');
-    title.className = 't-title';
-    title.textContent = '🎵 ' + t.title;
-    if (mineShelf && t.status === 'published') {
-      const b = document.createElement('span');
-      b.className = 'pubbadge';
-      b.textContent = '📻 In the library';
-      title.appendChild(b);
-    }
-    row.appendChild(title);
-    const meta = document.createElement('div');
-    meta.className = 't-meta';
-    meta.textContent = trackMeta(t);
-    row.appendChild(meta);
-    const audio = document.createElement('audio');
-    audio.controls = true;
-    audio.preload = 'none';
-    audio.src = '/v1/music/' + t.id + '/audio';
-    row.appendChild(audio);
-    if (mineShelf) {
-      const actions = document.createElement('div');
-      actions.className = 't-actions';
-      const pubBtn = document.createElement('button');
-      pubBtn.className = 'linkbtn';
-      pubBtn.textContent = t.status === 'published' ? '📤 Pull it off the library' : '📻 Publish to the library';
-      pubBtn.addEventListener('click', async function () {
-        await fetch('/v1/music/' + t.id + '/' + (t.status === 'published' ? 'unpublish' : 'publish'), { method: 'POST' });
-        loadShelves();
-      });
-      actions.appendChild(pubBtn);
-      const del = document.createElement('button');
-      del.className = 'linkbtn danger';
-      del.textContent = '🗑️ Delete';
-      del.addEventListener('click', async function () {
-        if (!confirm('Delete "' + t.title + '"? This cannot be undone.')) return;
-        await fetch('/v1/music/' + t.id, { method: 'DELETE' });
-        loadShelves();
-      });
-      actions.appendChild(del);
-      row.appendChild(actions);
-    }
-    return row;
-  }
-
-  async function fillShelf(url, boxId, mineShelf, emptyText) {
-    try {
-      const res = await fetch(url);
-      const data = await res.json();
-      if (!data.ok) return;
-      const box = document.getElementById(boxId);
-      box.innerHTML = '';
-      if (!data.tracks.length) {
-        const p = document.createElement('p');
-        p.className = 'empty';
-        p.textContent = emptyText;
-        box.appendChild(p);
-        return;
-      }
-      for (const t of data.tracks) box.appendChild(trackRow(t, mineShelf));
-    } catch {}
-  }
-
-  function loadShelves() {
-    fillShelf('/v1/music', 'mymusic', true, 'Nothing saved yet — make your first song!');
-    fillShelf('/v1/music/library', 'library', false, 'The library is quiet — publish the first song!');
-  }
-  loadShelves();
   `;
 }
+
