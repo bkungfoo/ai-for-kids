@@ -2,16 +2,21 @@ import { config } from '../config.js';
 import { ProviderRequestError } from './types.js';
 
 /**
- * AIMusicAPI (musicapi.ai family) adapter — Suno-style song generation for the
+ * AIMusicAPI (aimusicapi.org) adapter — Suno-style song generation for the
  * kids' music maker. The API is asynchronous:
  *
- *   POST /api/v1/sonic/create              -> { task_id }
- *   GET  /api/v1/sonic/task/{task_id}      -> { state, clips[...] }   (1–3 min)
+ *   POST /api/v2/generate            -> { workId }
+ *   GET  /api/v2/feed?workId={id}    -> { data: { type, response_data[...] } }
  *
- * We use description mode (custom_mode=false): one natural-language prompt in,
- * a full song out. The route layer owns moderation (the child's words are
- * input-moderated before submit; returned title/lyrics are output-moderated
- * before the child sees or hears anything).
+ * Observed task lifecycle: type=IN_PROGRESS (items empty, then status "text",
+ * then "first" — which already carries a PARTIAL audio_url) and finally
+ * type=SUCCESS with status "complete" / "All generated successfully.". We only
+ * take clips once the task reports success, never the partial stream.
+ *
+ * We use inspiration mode: one natural-language description in (max 400
+ * chars), a full song out. The route layer owns moderation (the child's words
+ * are input-moderated before submit; returned title/lyrics are
+ * output-moderated before the child sees or hears anything).
  */
 
 export interface MusicTaskClip {
@@ -33,32 +38,32 @@ export interface MusicTaskStatus {
  * songs before the child's own words and pickers are applied.
  */
 export const CHILD_SAFE_MUSIC_PREAMBLE =
-  "A wholesome song for a children's creative app (ages 5-12). It must be " +
-  'completely child-friendly: clean, positive lyrics with no violence, fear, ' +
-  'romance, innuendo, profanity, drugs or dark themes. ';
+  'A wholesome, completely child-friendly song for kids ages 5-12: clean and ' +
+  'positive, no violence, fear, romance, innuendo, profanity or dark themes.';
+
+/** The API caps inspiration descriptions at 400 characters. */
+export const MUSIC_DESCRIPTION_MAX = 400;
 
 export function aiMusicConfigured(): boolean {
   return Boolean(config.providers.aiMusic.apiKey);
 }
 
-/** Submit a description-mode generation. Resolves to the upstream task id. */
+/** Submit an inspiration-mode generation. Resolves to the upstream work id. */
 export async function submitMusicTask(
   description: string,
   instrumental: boolean,
 ): Promise<string> {
   const { apiKey, baseUrl, model } = config.providers.aiMusic;
-  const res = await fetch(`${baseUrl}/api/v1/sonic/create`, {
+  const res = await fetch(`${baseUrl}/api/v2/generate`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      task_type: 'create_music',
-      custom_mode: false,
-      gpt_description_prompt: description,
+      model,
+      gpt_description_prompt: description.slice(0, MUSIC_DESCRIPTION_MAX),
       make_instrumental: instrumental,
-      mv: model,
     }),
   });
   if (!res.ok) {
@@ -72,10 +77,10 @@ export async function submitMusicTask(
   return taskId;
 }
 
-/** Poll a generation task and normalize the (loosely documented) response. */
+/** Poll a generation task and normalize the response. */
 export async function pollMusicTask(taskId: string): Promise<MusicTaskStatus> {
   const { apiKey, baseUrl } = config.providers.aiMusic;
-  const res = await fetch(`${baseUrl}/api/v1/sonic/task/${encodeURIComponent(taskId)}`, {
+  const res = await fetch(`${baseUrl}/api/v2/feed?workId=${encodeURIComponent(taskId)}`, {
     headers: { authorization: `Bearer ${apiKey}` },
   });
   if (!res.ok) {
@@ -83,15 +88,17 @@ export async function pollMusicTask(taskId: string): Promise<MusicTaskStatus> {
   }
   const data = (await res.json()) as Record<string, unknown>;
 
-  const state = findString(data, ['state', 'status'])?.toLowerCase() ?? '';
-  if (state === 'failed' || state === 'error') {
+  // data.type is the authoritative task state (found before the per-clip
+  // status fields, which report the partial "text"/"first" stages).
+  const state = findString(data, ['state', 'type', 'status'])?.toLowerCase() ?? '';
+  if (state === 'failed' || state === 'error' || state === 'fail') {
     return { state: 'failed', clips: [], error: findString(data, ['error', 'message']) ?? 'generation failed' };
   }
 
   // Clips can live under different keys depending on API version — scan for
   // any objects that carry an audio URL.
   const clips = collectClips(data);
-  if (state === 'succeeded' || state === 'complete' || state === 'completed') {
+  if (state === 'success' || state === 'succeeded' || state === 'complete' || state === 'completed') {
     return clips.length
       ? { state: 'succeeded', clips }
       : { state: 'failed', clips: [], error: 'succeeded but no audio in response' };
@@ -116,7 +123,7 @@ export async function downloadAudio(url: string): Promise<{ bytes: Buffer; mimeT
 // --- response spelunking ---------------------------------------------------------
 
 function pickTaskId(data: Record<string, unknown>): string | undefined {
-  return findString(data, ['task_id', 'taskId', 'id']);
+  return findString(data, ['workId', 'task_id', 'taskId', 'id']);
 }
 
 /** Depth-first search for the first string value under any of the keys. */
