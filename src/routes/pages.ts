@@ -947,9 +947,9 @@ function readerClientJs(): string {
   function stopReading() {
     readAllMode = false;
     haltPlayback();
+    stopAllBg(); // manual stop silences the music (and any fade) immediately
   }
   function haltPlayback() {
-    stopBgMusic(); // background music lives and dies with the narration
     if (!reading) return;
     const r = reading;
     reading = null; // first, so cancel-triggered onend callbacks see it
@@ -959,22 +959,64 @@ function readerClientJs(): string {
     if (r.btn) { r.btn.classList.remove('reading'); r.btn.textContent = r.btnLabel; }
   }
 
-  // Per-page background music: plays softly (looped) UNDER the narration, only
-  // while narration is running. Flipping pages stops narration (and so the
-  // music); read-all starts the next page's music — or silence — as it goes.
-  let bgMusic = null;
+  // Per-page background music: plays softly (looped) UNDER the narration.
+  // When narration ends NATURALLY the music lingers ~5s, fading to silence
+  // (read-all waits for the fade before flipping). Manual stops and page
+  // flips silence everything immediately.
+  const BG_VOLUME = 0.22; // the words stay on top
+  const BG_FADE_MS = 5000;
+  let bgMusic = null;   // playing under the current narration
+  let fadingBg = null;  // { audio, timer } — post-narration fade in progress
+
   function startBgMusic(pageIndex, page) {
-    stopBgMusic();
+    stopAllBg();
     if (!page || !page.music) return;
     bgMusic = new Audio('/v1/books/' + bookId + '/pages/' + pageIndex + '/music-audio');
     bgMusic.loop = true;
-    bgMusic.volume = 0.22; // the words stay on top
+    bgMusic.volume = BG_VOLUME;
     bgMusic.play().catch(() => {});
   }
-  function stopBgMusic() {
-    if (!bgMusic) return;
-    try { bgMusic.pause(); } catch {}
-    bgMusic = null;
+  function stopAllBg() {
+    if (fadingBg) {
+      clearInterval(fadingBg.timer);
+      try { fadingBg.audio.pause(); } catch {}
+      fadingBg = null;
+    }
+    if (bgMusic) {
+      try { bgMusic.pause(); } catch {}
+      bgMusic = null;
+    }
+  }
+
+  /**
+   * Called when a page's narration finishes on its own: let the music play on
+   * for BG_FADE_MS, ramping the volume down to silence. Returns a handle whose
+   * wait(cb) fires once the fade is over — immediately when there is nothing
+   * to fade — so read-all can hold the page flip for it.
+   */
+  function beginBgFade() {
+    if (!bgMusic) return { wait(cb) { if (cb) cb(); } };
+    const audio = bgMusic;
+    bgMusic = null; // out of startBgMusic's way; the fade owns it now
+    const startVol = audio.volume;
+    const steps = 25;
+    let step = 0;
+    let finished = false;
+    const waiting = [];
+    const timer = setInterval(() => {
+      step++;
+      if (step >= steps) {
+        clearInterval(timer);
+        try { audio.pause(); } catch {}
+        if (fadingBg && fadingBg.audio === audio) fadingBg = null;
+        finished = true;
+        while (waiting.length) waiting.shift()();
+      } else {
+        audio.volume = Math.max(0, startVol * (1 - step / steps));
+      }
+    }, BG_FADE_MS / steps);
+    fadingBg = { audio: audio, timer: timer };
+    return { wait(cb) { if (!cb) return; if (finished) cb(); else waiting.push(cb); } };
   }
 
   function pickVoice() {
@@ -1089,8 +1131,11 @@ function readerClientJs(): string {
       btn.textContent = '⏹ Stop reading';
       startBgMusic(pageIndex, page); // this page's background music (if any)
       narratePage(pageIndex, page, el, btn, label, () => {
+        // Narration finished on its own: let the music fade out (~5s). In
+        // read-all, the page flip waits for the fade to finish.
+        const fade = beginBgFade();
         if (reading && reading.btn === btn) haltPlayback();
-        if (readAllMode) advanceReadAll();
+        if (readAllMode) fade.wait(() => { if (readAllMode) advanceReadAll(); });
       });
     }
     btn.addEventListener('click', () => {
@@ -1128,6 +1173,7 @@ function readerClientJs(): string {
     btn.addEventListener('click', async () => {
       if (reading && reading.btn === btn) { stopReading(); return; }
       haltPlayback();
+      stopAllBg(); // a fresh read-all starts silent (no leftover fade)
       if (!book.pages.length) { setStatus('This book has no pages to read yet!', 'blocked'); return; }
       readAllMode = true;
       btn.classList.add('reading');
