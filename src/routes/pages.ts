@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { config } from '../config.js';
 import { requirePageAuth } from '../middleware/requireAuth.js';
 import { availableEngines, ENGINE_NAMES, illustratorName } from '../providers/imageProvider.js';
+import { MUSIC_BG_BRIGHT } from './wallpapers.js';
 
 /**
  * Authenticated browser pages: the landing hub and one page per creative tool.
@@ -27,7 +28,7 @@ interface Feature {
 
 const FEATURES: Feature[] = [
   { href: '/books', icon: '📖', title: 'Storybooks', blurb: 'Read, write, and use AI to illustrate storybooks', ready: true },
-  { href: '/music', icon: '🎵', title: 'Music', blurb: 'Compose a song', ready: false },
+  { href: '/music', icon: '🎵', title: 'Music', blurb: 'Make a song with AI', ready: true },
   { href: '/voice', icon: '🎙️', title: 'Voices', blurb: 'Turn words into speech', ready: false },
   { href: '/code', icon: '💻', title: 'Coding', blurb: 'Build something with code', ready: false },
 ];
@@ -86,7 +87,7 @@ const LIBRARY_MODE_CSS = `<style>
 </style>`;
 
 /** Shared page shell: Harbor House styling + header with sign-out. */
-function shell(opts: {
+export function shell(opts: {
   title: string;
   /** true = "← Home"; or a custom destination for the top-left link. */
   back?: boolean | { href: string; label: string };
@@ -151,7 +152,7 @@ function shell(opts: {
 pagesRouter.get('/', (_req: Request, res: Response) => {
   const tiles = FEATURES.map(
     (f) => `
-    <a class="tile${f.ready ? '' : ' soon'}${f.href === '/books' ? ' storybooks' : ''}" href="${f.href}">
+    <a class="tile${f.ready ? '' : ' soon'}${f.href === '/books' ? ' storybooks' : ''}${f.href === '/music' ? ' musictile' : ''}" href="${f.href}">
       <span class="tile-icon" aria-hidden="true">${f.icon}</span>
       <span class="tile-title">${f.title}</span>
       <span class="tile-blurb">${f.blurb}</span>
@@ -185,6 +186,14 @@ pagesRouter.get('/', (_req: Request, res: Response) => {
             url("data:image/svg+xml,${encodeURIComponent(LIBRARY_BG_SVG)}") repeat;
           background-size: auto, 200px;
           border-color: #e7dcc4;
+        }
+        /* Music tile: the sunny staff-and-notes wallpaper behind the text. */
+        .tile.musictile {
+          background:
+            linear-gradient(rgba(255,255,255,.58), rgba(255,255,255,.58)),
+            url("data:image/svg+xml,${encodeURIComponent(MUSIC_BG_BRIGHT)}") repeat;
+          background-size: auto, 220px;
+          border-color: #cfe4ef;
         }
         .badge { position: absolute; top: 12px; right: 12px; font-size: 11px; font-weight: 700;
           color: #2c6e8f; background: #dcebf1; border-radius: 999px; padding: 3px 9px; }
@@ -2458,6 +2467,6 @@ function comingSoon(icon: string, name: string): string {
   });
 }
 
-pagesRouter.get('/music', (_req, res) => res.type('html').send(comingSoon('🎵', 'Music')));
+// (/music is served by musicPagesRouter — see routes/musicPages.ts.)
 pagesRouter.get('/voice', (_req, res) => res.type('html').send(comingSoon('🎙️', 'Voices')));
 pagesRouter.get('/code', (_req, res) => res.type('html').send(comingSoon('💻', 'Coding')));

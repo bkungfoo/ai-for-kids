@@ -20,7 +20,7 @@ child ──▶ gateway ──[input moderation]──▶ provider ──[output
 
 | Route        | Provider              | Purpose                          | Moderated |
 |--------------|-----------------------|----------------------------------|-----------|
-| `POST /v1/music`  | Suno             | music generation                 | prompt in; lyrics + title out |
+| `/v1/music/*`     | AIMusicAPI (Suno-style) | kids' music maker         | prompt in; title + lyrics out (moderated before the child hears anything) |
 | `POST /v1/voice`  | ElevenLabs       | TTS / voice generation           | text in (audio out) |
 | `POST /v1/images` | Nano Banana Pro (Replicate) / Nano Banana 2 (Gemini) | text-to-image | prompt in; captions out; image via Vision SafeSearch |
 | `POST /v1/code`   | Claude Code      | "vibe coding" for kids           | prompt in; generated code out |
@@ -241,6 +241,25 @@ The Gemini engine gets the same three channels (reference pictures as inline
 image parts; story so far + scene as the text prompt), so consistency works
 whichever engine is active. The child never supplies these context fields — they
 are derived entirely from the book.
+
+## Music maker
+
+`/music` is a hub like Storybooks — **Make new song** (`/music/new`),
+**My music** (`/music/mine`) and **Browse the library** (`/music/library`) —
+and every music page carries a background-mode picker (Light / Dark /
+Purple, remembered per browser) that themes the whole card IDE-style. The
+maker lets kids generate songs: optional **style** buttons (pop, jazz, R&B,
+K-pop, classical, EDM, rock, metal, video game, lo-fi), optional **mood**
+buttons (lively, happy, chill, dreamy, melancholy, angry, epic, silly), a
+**words vs instrumental** toggle, and a free-text idea box. Every generation
+leads with a child-safety preamble; the child's words are input-moderated, and
+the returned title/lyrics are output-moderated BEFORE the track is stored or
+played. Generation is async (AIMusicAPI `sonic` tasks, 1–3 min): the browser
+polls a job id while the server polls upstream, then the song auto-plays in a
+small player. Tracks start unsaved — the child chooses **Save to My music** or
+**Publish to the library** (shared, with pull-back and delete for the owner);
+unsaved tracks are pruned after a day. Audio is stored as real mp3 files under
+`data/music/audio/` and streamed via an authenticated route.
 
 ## Operator review area (adults only)
 
