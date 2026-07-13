@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { config } from '../config.js';
 import { requirePageAuth } from '../middleware/requireAuth.js';
 import { availableEngines, ENGINE_NAMES, illustratorName } from '../providers/imageProvider.js';
+import { MUSIC_BG_BRIGHT } from './wallpapers.js';
 
 /**
  * Authenticated browser pages: the landing hub and one page per creative tool.
@@ -151,7 +152,7 @@ export function shell(opts: {
 pagesRouter.get('/', (_req: Request, res: Response) => {
   const tiles = FEATURES.map(
     (f) => `
-    <a class="tile${f.ready ? '' : ' soon'}${f.href === '/books' ? ' storybooks' : ''}" href="${f.href}">
+    <a class="tile${f.ready ? '' : ' soon'}${f.href === '/books' ? ' storybooks' : ''}${f.href === '/music' ? ' musictile' : ''}" href="${f.href}">
       <span class="tile-icon" aria-hidden="true">${f.icon}</span>
       <span class="tile-title">${f.title}</span>
       <span class="tile-blurb">${f.blurb}</span>
@@ -185,6 +186,14 @@ pagesRouter.get('/', (_req: Request, res: Response) => {
             url("data:image/svg+xml,${encodeURIComponent(LIBRARY_BG_SVG)}") repeat;
           background-size: auto, 200px;
           border-color: #e7dcc4;
+        }
+        /* Music tile: the sunny staff-and-notes wallpaper behind the text. */
+        .tile.musictile {
+          background:
+            linear-gradient(rgba(255,255,255,.58), rgba(255,255,255,.58)),
+            url("data:image/svg+xml,${encodeURIComponent(MUSIC_BG_BRIGHT)}") repeat;
+          background-size: auto, 220px;
+          border-color: #cfe4ef;
         }
         .badge { position: absolute; top: 12px; right: 12px; font-size: 11px; font-weight: 700;
           color: #2c6e8f; background: #dcebf1; border-radius: 999px; padding: 3px 9px; }
