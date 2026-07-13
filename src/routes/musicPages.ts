@@ -33,7 +33,7 @@ const MUSIC_MODE_CSS = `<style>
     --accent: #2c6e8f; --badge-bg: #dcebf1; --badge-fg: #2c6e8f;
     --danger: #8a1c1c; --warn: #8a5a00;
     background: #e9f6fb url("data:image/svg+xml,${encodeURIComponent(MUSIC_BG_BRIGHT)}") repeat;
-    color: #16324a; transition: background-color .3s;
+    color: #16324a;
   }
   header { color: #35566b; }
   .back, .signout { color: #35566b; }
@@ -78,7 +78,7 @@ const MUSIC_MODE_CSS = `<style>
 const MUSIC_CSS = `<style>
   main { width: min(94vw, 860px); }
   .card { background: var(--card); color: var(--fg);
-    box-shadow: 0 18px 40px var(--card-shadow); transition: background .3s, color .3s; }
+    box-shadow: 0 18px 40px var(--card-shadow); }
   .card .sub { color: var(--muted); }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }
   .chip { display: inline-flex; align-items: center; gap: 6px; padding: 8px 13px;
