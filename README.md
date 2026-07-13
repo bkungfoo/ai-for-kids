@@ -185,6 +185,19 @@ picture prompts (e.g. "a small mouse wearing a red cape") and feelings turned
 into visible actions — and fills the prompt box (overwriting whatever was
 there). Nothing is painted until the child clicks **🖌️ Paint it!**.
 
+**Background music.** In edit mode, once a page has its words and picture, a
+🎼 button (`/v1/books/:id/pages/:index/music-job` + friends) adds instrumental
+background music: an AI-suggested prompt describing the scene's mood (Gemini,
+editable, output-moderated; the edited prompt is input-moderated) generates
+two takes via AIMusicAPI — always `make_instrumental` — which the child
+previews in place and picks one (or regenerates, cancels, or removes existing
+music). The chosen mp3 lives under `data/books/music/` (`page.music`), streams
+through an authenticated owner-or-published route, and plays softly (looped,
+low volume) **only while narration is running** — flipping pages or stopping
+the narration stops it, and read-all switches it per page automatically.
+Duplicated pages don't copy music (files aren't reference-counted); deleting a
+book cleans up its referenced music files.
+
 **Page management.** In edit mode each page has tools to move it earlier/later
 (reordering never crosses the "The End" page), insert a new page before or
 after it (the illustration context — story-so-far and reference pictures — is

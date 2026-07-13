@@ -41,6 +41,20 @@ export interface BookPage {
    * free). Cleared whenever the words change. Null/absent means not narrated.
    */
   narration?: BookNarration | null;
+  /**
+   * Instrumental background music for the page — plays softly underneath the
+   * narration. The audio itself is an mp3 under data/books/music/<id>.mp3
+   * (megabytes don't belong inside book JSON). Null/absent means no music.
+   */
+  music?: PageMusic | null;
+}
+
+export interface PageMusic {
+  /** Audio file id (uuid) under data/books/music/. */
+  id: string;
+  /** The (moderated) prompt that produced it — prefilled when changing it. */
+  prompt: string;
+  mimeType: string;
 }
 
 export interface BookNarration {
@@ -53,6 +67,21 @@ export interface BookNarration {
    * anything else (including pre-key entries) is regenerated.
    */
   key?: string;
+}
+
+/** Where a page's background-music mp3 lives (uuid-checked, like books). */
+export function pageMusicFile(musicId: string): string | null {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(musicId)) return null;
+  return path.join(DATA_DIR, 'music', `${musicId}.mp3`);
+}
+
+/** Persist a freshly generated background-music mp3 and return its id. */
+export async function savePageMusicAudio(bytes: Buffer): Promise<string> {
+  const id = randomUUID();
+  const file = pageMusicFile(id)!;
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, bytes);
+  return id;
 }
 
 /** 'draft' books live on the owner's shelf; 'published' ones appear in the library. */
@@ -268,7 +297,11 @@ export async function duplicatePage(id: string, index: number): Promise<Book | u
   if (!book) return undefined;
   const page = book.pages[index];
   if (!page || page.isEnd) return undefined;
-  book.pages.splice(index + 1, 0, structuredClone(page));
+  const copy = structuredClone(page);
+  // Music files aren't reference-counted — the copy starts without music so
+  // deleting one page's music can never silence its twin.
+  delete copy.music;
+  book.pages.splice(index + 1, 0, copy);
   book.updatedAt = new Date().toISOString();
   await save(book);
   return book;
@@ -373,10 +406,16 @@ export async function removeEndPage(id: string): Promise<Book | undefined> {
 export async function deleteBook(id: string): Promise<boolean> {
   const file = fileFor(id);
   if (!file) return false;
+  // Best-effort cleanup of the book's referenced background-music files.
+  const book = await getBook(id);
   try {
     await unlink(file);
-    return true;
   } catch {
     return false;
   }
+  for (const page of book?.pages ?? []) {
+    const music = page.music ? pageMusicFile(page.music.id) : null;
+    if (music) await unlink(music).catch(() => {});
+  }
+  return true;
 }

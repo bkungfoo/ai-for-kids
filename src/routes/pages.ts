@@ -812,6 +812,25 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
           transition: color .5s ease; }
         .words-edit { text-align: center; }
         .page input.revealed { animation: dustreveal 1s ease; }
+        /* Background music (edit mode) */
+        .readbtn.music-btn { background: #e6f2ec; border-color: #7ab89a; }
+        .music-panel label { display: block; font-size: 13px; font-weight: 700; color: #6b5d43;
+          margin-bottom: 6px; }
+        .music-panel textarea { width: 100%; min-height: 76px; font-family: inherit; font-size: 14px;
+          line-height: 1.45; border: 1px dashed #cbbfa4; background: transparent; border-radius: 8px;
+          padding: 8px 10px; resize: vertical; }
+        .music-working { display: flex; align-items: center; gap: 8px; margin-top: 10px;
+          font-size: 14px; font-weight: 600; color: #2c6e8f; }
+        .music-working .notes-anim { font-size: 20px; display: inline-block;
+          animation: bob 1s ease-in-out infinite alternate; }
+        @keyframes bob { from { transform: translateY(2px) rotate(-8deg); } to { transform: translateY(-4px) rotate(8deg); } }
+        .music-cand { border: 1px solid #e0d6bd; background: #fdf9f0; border-radius: 10px;
+          padding: 10px 12px; margin-top: 8px; }
+        .music-cand .mc-title { font-weight: 800; font-size: 13px; color: #8a5a00; }
+        .music-cand audio { width: 100%; margin-top: 6px; }
+        .music-cand .cta { padding: 8px 12px; font-size: 13px; margin-top: 8px; }
+        .music-actions { display: flex; gap: 12px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+        .music-actions .cta { padding: 9px 14px; font-size: 14px; }
         /* Page tools (edit mode) */
         .pagetools { display: flex; flex-wrap: wrap; gap: 4px 10px; justify-content: center;
           margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e0d6bd; }
@@ -930,6 +949,7 @@ function readerClientJs(): string {
     haltPlayback();
   }
   function haltPlayback() {
+    stopBgMusic(); // background music lives and dies with the narration
     if (!reading) return;
     const r = reading;
     reading = null; // first, so cancel-triggered onend callbacks see it
@@ -937,6 +957,24 @@ function readerClientJs(): string {
     if (r.utter && window.speechSynthesis) { try { speechSynthesis.cancel(); } catch {} }
     if (r.restore) r.restore();
     if (r.btn) { r.btn.classList.remove('reading'); r.btn.textContent = r.btnLabel; }
+  }
+
+  // Per-page background music: plays softly (looped) UNDER the narration, only
+  // while narration is running. Flipping pages stops narration (and so the
+  // music); read-all starts the next page's music — or silence — as it goes.
+  let bgMusic = null;
+  function startBgMusic(pageIndex, page) {
+    stopBgMusic();
+    if (!page || !page.music) return;
+    bgMusic = new Audio('/v1/books/' + bookId + '/pages/' + pageIndex + '/music-audio');
+    bgMusic.loop = true;
+    bgMusic.volume = 0.22; // the words stay on top
+    bgMusic.play().catch(() => {});
+  }
+  function stopBgMusic() {
+    if (!bgMusic) return;
+    try { bgMusic.pause(); } catch {}
+    bgMusic = null;
   }
 
   function pickVoice() {
@@ -1049,6 +1087,7 @@ function readerClientJs(): string {
       haltPlayback();
       btn.classList.add('reading');
       btn.textContent = '⏹ Stop reading';
+      startBgMusic(pageIndex, page); // this page's background music (if any)
       narratePage(pageIndex, page, el, btn, label, () => {
         if (reading && reading.btn === btn) haltPlayback();
         if (readAllMode) advanceReadAll();
@@ -1516,6 +1555,8 @@ function readerClientJs(): string {
         right.appendChild(noImage('No picture on this page'));
       }
       if (editable()) right.appendChild(regenControls(spread - 2, p));
+      // Background music, once the page has both its words and its picture.
+      if (editable() && p.text && p.image) right.appendChild(musicControls(spread - 2, p));
     } else {
       renderAddPage();
     }
@@ -2059,6 +2100,208 @@ function readerClientJs(): string {
       pic.promptEl.focus();
     });
     return wrap;
+  }
+
+  // Background music (edit mode, once a page has words + picture): an
+  // AI-suggested, editable prompt generates two instrumental takes; the child
+  // previews both and picks one (or regenerates, cancels, or removes existing
+  // music). The chosen take plays softly under the narration.
+  function musicControls(pageIndex, page) {
+    const wrap = document.createElement('div');
+    wrap.className = 'regen';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'readbtn music-btn';
+    toggle.textContent = page.music ? '🎼 Change background music' : '🎼 Add background music';
+    wrap.appendChild(toggle);
+    if (page.music) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'linkbtn danger';
+      remove.style.marginLeft = '10px';
+      remove.textContent = '✕ Remove background music';
+      remove.addEventListener('click', async () => {
+        if (!confirm('Remove the background music from this page?')) return;
+        remove.disabled = true;
+        try {
+          const res = await fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/music', { method: 'DELETE' });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok) {
+            book = data.book;
+            setStatus('Background music removed. 🔇');
+            render();
+            return;
+          }
+          const f = friendlyError(res, data);
+          setStatus(f.text, f.cls);
+          remove.disabled = false;
+        } catch {
+          setStatus('Could not reach the server. Check your connection and try again.', 'error');
+          remove.disabled = false;
+        }
+      });
+      wrap.appendChild(remove);
+    }
+    toggle.addEventListener('click', () => openMusicPanel(pageIndex, page, wrap));
+    return wrap;
+  }
+
+  function openMusicPanel(pageIndex, page, wrap) {
+    stopReading(); // no narration/music while composing new music
+    wrap.innerHTML = '';
+    wrap.className = 'regen music-panel';
+
+    const label = document.createElement('label');
+    label.textContent = 'What should the music feel like?';
+    wrap.appendChild(label);
+    const ta = document.createElement('textarea');
+    ta.maxLength = 400;
+    wrap.appendChild(ta);
+
+    const actions = document.createElement('div');
+    actions.className = 'music-actions';
+    const gen = document.createElement('button');
+    gen.type = 'button';
+    gen.className = 'cta';
+    gen.textContent = '🎵 Generate music';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'linkbtn';
+    cancel.textContent = '✕ Cancel';
+    cancel.addEventListener('click', () => { setStatus(''); render(); });
+    actions.appendChild(gen);
+    actions.appendChild(cancel);
+    wrap.appendChild(actions);
+
+    const workingEl = document.createElement('div');
+    workingEl.className = 'music-working';
+    workingEl.hidden = true;
+    workingEl.innerHTML = '<span class="notes-anim">🎶</span><span>Composing… this takes a minute or two!</span>';
+    wrap.appendChild(workingEl);
+
+    const candBox = document.createElement('div');
+    wrap.appendChild(candBox);
+
+    // Prefill: the existing prompt when changing music; otherwise ask the AI
+    // for a prompt that fits the scene and mood (still fully editable).
+    if (page.music && page.music.prompt) {
+      ta.value = page.music.prompt;
+    } else {
+      ta.placeholder = '🎼 The music director is thinking…';
+      ta.disabled = true;
+      gen.disabled = true;
+      fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/suggest-music-prompt', { method: 'POST' })
+        .then((res) => res.json().then((data) => ({ res, data })))
+        .then(({ res, data }) => {
+          if (res.ok && data.ok) ta.value = (data.result.musicPrompt || '').slice(0, 400);
+        })
+        .catch(() => {})
+        .finally(() => {
+          ta.disabled = false;
+          gen.disabled = false;
+          ta.placeholder = 'Gentle, hopeful music with soft piano and warm strings…';
+          ta.focus();
+        });
+    }
+
+    let pollTimer = null;
+    gen.addEventListener('click', async () => {
+      const prompt = ta.value.trim();
+      if (!prompt) { setStatus('Tell me how the music should feel first! 🎼', 'blocked'); return; }
+      gen.disabled = true;
+      candBox.innerHTML = '';
+      workingEl.hidden = false;
+      setStatus('');
+      try {
+        const res = await fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/music-job', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ prompt: prompt }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          const f = friendlyError(res, data);
+          setStatus(f.text, f.cls);
+          workingEl.hidden = true;
+          gen.disabled = false;
+          return;
+        }
+        const jobId = data.jobId;
+        pollTimer = setInterval(async () => {
+          try {
+            const jr = await fetch('/v1/books/' + bookId + '/music-job/' + jobId);
+            const jd = await jr.json().catch(() => ({}));
+            if (!jr.ok || !jd.ok) throw new Error('gone');
+            if (jd.state === 'working') return;
+            clearInterval(pollTimer);
+            workingEl.hidden = true;
+            gen.disabled = false;
+            gen.textContent = '🔁 Regenerate';
+            if (jd.state === 'done') {
+              showCandidates(jobId, jd.candidates || 0);
+              setStatus('Listen to both — pick the one that fits your page! 🎧');
+            } else {
+              setStatus(jd.message || 'The music maker had trouble — try again!', 'error');
+            }
+          } catch {
+            clearInterval(pollTimer);
+            workingEl.hidden = true;
+            gen.disabled = false;
+            setStatus('Lost track of the music — please try again.', 'error');
+          }
+        }, 4000);
+      } catch {
+        setStatus('Could not reach the server. Check your connection and try again.', 'error');
+        workingEl.hidden = true;
+        gen.disabled = false;
+      }
+    });
+
+    function showCandidates(jobId, count) {
+      candBox.innerHTML = '';
+      for (let n = 1; n <= count; n++) {
+        const card = document.createElement('div');
+        card.className = 'music-cand';
+        const t = document.createElement('div');
+        t.className = 'mc-title';
+        t.textContent = '🎵 Music ' + n;
+        card.appendChild(t);
+        const audio = document.createElement('audio');
+        audio.controls = true;
+        audio.preload = 'none';
+        audio.src = '/v1/books/' + bookId + '/music-job/' + jobId + '/audio/' + n;
+        card.appendChild(audio);
+        const use = document.createElement('button');
+        use.type = 'button';
+        use.className = 'cta';
+        use.textContent = '✅ Use this one';
+        use.addEventListener('click', async () => {
+          candBox.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+          try {
+            const res = await fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/music', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ jobId: jobId, choice: n }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.ok) {
+              book = data.book;
+              setStatus('🎼 Background music added! It plays softly while the page is read aloud.');
+              render();
+              return;
+            }
+            const f = friendlyError(res, data);
+            setStatus(f.text, f.cls);
+            candBox.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+          } catch {
+            setStatus('Could not reach the server. Check your connection and try again.', 'error');
+            candBox.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+          }
+        });
+        card.appendChild(use);
+        candBox.appendChild(card);
+      }
+    }
   }
 
   // Page tools (edit mode): move / insert after / copy / remove this page.
