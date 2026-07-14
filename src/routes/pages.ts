@@ -662,19 +662,6 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .page-pic { position: relative; display: inline-block; line-height: 0; margin: auto; max-width: 100%; }
         .page-pic .drawing-overlay { position: absolute; inset: 0; width: 100% !important;
           height: 100% !important; max-height: none; margin: 0; pointer-events: none; }
-        .draw-canvas { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 8px;
-          touch-action: none; cursor: crosshair; }
-        /* Pen palette */
-        .draw-tool .palette { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
-        .draw-tool .swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid #cbbfa4;
-          cursor: pointer; padding: 0; }
-        .draw-tool .swatch[data-color="#ffffff"] { border-color: #b3a789; }
-        .draw-tool .tool.active { outline: 3px solid #2c6e8f; outline-offset: 1px; }
-        .draw-tool .eraser, .draw-tool .tool:not(.swatch) { font-size: 13px; font-weight: 600;
-          padding: 5px 10px; border-radius: 8px; border: 1px solid #cbbfa4; background: #fdf9f0;
-          color: #5a4632; cursor: pointer; }
-        .draw-tool .draw-actions { display: flex; gap: 12px; align-items: center; margin-top: 10px; }
-        .draw-tool .draw-actions .cta { padding: 9px 14px; font-size: 14px; margin: 0; }
         .no-image { margin: auto; color: #b3a789; font-size: 14px; text-align: center; }
         .booknav { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; }
         .navbtn { padding: 10px 16px; font-size: 14px; font-weight: 700; color: #5a4632;
@@ -814,7 +801,9 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .page input.revealed { animation: dustreveal 1s ease; }
         /* Background music (edit mode) */
         .readbtn.music-btn { background: #e6f2ec; border-color: #7ab89a; }
-        .musicrow { flex-wrap: wrap; }
+        .musicstack { display: flex; flex-direction: column; }
+        .musicstack .readrow { margin-top: 8px; }
+        .readbtn.remove-music { background: #fbecec; border-color: #d9938e; color: #8a1c1c; }
         /* The compose dialog floats in front of the book */
         .music-backdrop { position: fixed; inset: 0; background: rgba(30,22,10,.55);
           z-index: 60; display: flex; align-items: center; justify-content: center;
@@ -1598,9 +1587,9 @@ function readerClientJs(): string {
       num.textContent = String(spread - 1);
       left.appendChild(num);
       left.appendChild(readRow(spread - 2, p, t));
+      if (editable()) left.appendChild(wordsEditControls(spread - 2, p, t));
       // Background music (left side), once the page has words and picture.
       if (editable() && p.text && p.image) left.appendChild(musicControls('page', spread - 2));
-      if (editable()) left.appendChild(wordsEditControls(spread - 2, p, t));
       if (editable()) left.appendChild(pageToolsControls(spread - 2));
       if (p.image) {
         const picWrap = document.createElement('div');
@@ -1614,7 +1603,6 @@ function readerClientJs(): string {
           picWrap.appendChild(d);
         }
         right.appendChild(picWrap);
-        if (editable()) right.appendChild(drawControls(spread - 2, p, picWrap, ai));
       } else {
         right.appendChild(noImage('No picture on this page'));
       }
@@ -1712,7 +1700,7 @@ function readerClientJs(): string {
     wrap.className = 'regen cover-regen';
     const toggle = document.createElement('button');
     toggle.type = 'button';
-    toggle.className = 'linkbtn';
+    toggle.className = 'readbtn';
     toggle.textContent = '🖌️ Change the cover';
     wrap.appendChild(toggle);
 
@@ -1779,7 +1767,6 @@ function readerClientJs(): string {
 
     toggle.addEventListener('click', () => {
       toggle.remove();
-      closeDrawTool(); // no drawing while changing the words
       textEl.style.display = 'none'; // the editor takes the text's place
 
       // Ephemeral fairy-dust background state for this editing session.
@@ -1832,184 +1819,6 @@ function readerClientJs(): string {
       });
     });
     return wrap;
-  }
-
-  // Remove any open drawing tool (called when a change-words/picture form opens).
-  function closeDrawTool() {
-    const dt = document.getElementById('draw-tool');
-    if (dt) dt.remove();
-    const cv = document.getElementById('draw-canvas');
-    if (cv) cv.remove();
-  }
-
-  // Pen palette: draw on the page's picture with a pen (colors) and an eraser.
-  // Only offered on a fully-made page (has words AND a picture), in edit mode.
-  const PEN_COLORS = ['#e23b3b','#f39a12','#f7d21a','#3aa657','#2c6e8f','#7a5aa0','#3d2f1e','#ffffff'];
-  function drawControls(pageIndex, page, picWrap, aiImg) {
-    const wrap = document.createElement('div');
-    wrap.className = 'regen draw-tool';
-    wrap.id = 'draw-tool';
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'linkbtn';
-    toggle.textContent = page.drawing ? '🖍️ Draw / erase on the picture' : '🖍️ Draw on the picture';
-    wrap.appendChild(toggle);
-
-    toggle.addEventListener('click', () => {
-      toggle.remove();
-      startDrawing(pageIndex, page, picWrap, aiImg, wrap);
-    });
-    return wrap;
-  }
-
-  function startDrawing(pageIndex, page, picWrap, aiImg, wrap) {
-    // Remove the static saved-drawing overlay: its pixels get loaded INTO the
-    // canvas below, so the canvas (which the pen and eraser act on) becomes the
-    // one and only drawing layer. Otherwise the old overlay would still show
-    // through and look impossible to erase.
-    const staleOverlay = picWrap.querySelector('.drawing-overlay');
-    if (staleOverlay) staleOverlay.remove();
-
-    // Size the canvas to the picture as it is displayed right now.
-    const rect = aiImg.getBoundingClientRect();
-    const w = Math.round(rect.width) || 400;
-    const h = Math.round(rect.height) || 400;
-    const canvas = document.createElement('canvas');
-    canvas.id = 'draw-canvas';
-    canvas.className = 'draw-canvas';
-    canvas.width = w;
-    canvas.height = h;
-    picWrap.appendChild(canvas);
-    const ctx = canvas.getContext('2d');
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-
-    // Continue from any existing drawing so the child can add to it.
-    if (page.drawing) {
-      const prev = new Image();
-      prev.onload = () => ctx.drawImage(prev, 0, 0, w, h);
-      prev.src = 'data:' + page.drawing.mimeType + ';base64,' + page.drawing.dataBase64;
-    }
-
-    let color = PEN_COLORS[0];
-    let erasing = false;
-    let drawing = false;
-
-    function pos(e) {
-      const r = canvas.getBoundingClientRect();
-      return { x: (e.clientX - r.left) * (canvas.width / r.width),
-               y: (e.clientY - r.top) * (canvas.height / r.height) };
-    }
-    function stroke(p) {
-      ctx.globalCompositeOperation = erasing ? 'destination-out' : 'source-over';
-      ctx.strokeStyle = color;
-      ctx.lineWidth = erasing ? 22 : 5;
-      ctx.lineTo(p.x, p.y);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-    }
-    canvas.addEventListener('pointerdown', (e) => {
-      drawing = true;
-      canvas.setPointerCapture(e.pointerId);
-      const p = pos(e);
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      stroke(p); // a tap leaves a dot
-    });
-    canvas.addEventListener('pointermove', (e) => { if (drawing) stroke(pos(e)); });
-    const end = () => { drawing = false; ctx.beginPath(); };
-    canvas.addEventListener('pointerup', end);
-    canvas.addEventListener('pointercancel', end);
-    canvas.addEventListener('pointerleave', end);
-
-    // --- palette ---
-    const pal = document.createElement('div');
-    pal.className = 'palette';
-    const swatches = [];
-    function selectTool(next) {
-      erasing = next === 'eraser';
-      pal.querySelectorAll('.tool').forEach((b) => b.classList.remove('active'));
-      if (next === 'eraser') eraserBtn.classList.add('active');
-      swatches.forEach((s) => { if (!erasing && s.dataset.color === color) s.classList.add('active'); });
-    }
-    for (const c of PEN_COLORS) {
-      const s = document.createElement('button');
-      s.type = 'button';
-      s.className = 'swatch tool';
-      s.dataset.color = c;
-      s.style.background = c;
-      s.title = 'Pen';
-      s.addEventListener('click', () => { color = c; selectTool('pen'); });
-      pal.appendChild(s);
-      swatches.push(s);
-    }
-    const eraserBtn = document.createElement('button');
-    eraserBtn.type = 'button';
-    eraserBtn.className = 'tool eraser';
-    eraserBtn.textContent = '🧽 Eraser';
-    eraserBtn.addEventListener('click', () => selectTool('eraser'));
-    pal.appendChild(eraserBtn);
-
-    const clearBtn = document.createElement('button');
-    clearBtn.type = 'button';
-    clearBtn.className = 'tool';
-    clearBtn.textContent = '🗑️ Clear';
-    clearBtn.addEventListener('click', () => {
-      if (!confirm('Erase your whole drawing on this page?')) return;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-    });
-    pal.appendChild(clearBtn);
-    wrap.appendChild(pal);
-
-    // --- save / cancel ---
-    const actions = document.createElement('div');
-    actions.className = 'draw-actions';
-    const save = document.createElement('button');
-    save.type = 'button';
-    save.className = 'cta';
-    save.textContent = '💾 Save my drawing';
-    const cancel = document.createElement('button');
-    cancel.type = 'button';
-    cancel.className = 'linkbtn';
-    cancel.textContent = 'Cancel';
-    actions.appendChild(save);
-    actions.appendChild(cancel);
-    wrap.appendChild(actions);
-
-    selectTool('pen'); // start on the first pen colour
-
-    cancel.addEventListener('click', () => { setStatus(''); render(); });
-
-    save.addEventListener('click', async () => {
-      save.disabled = true;
-      setStatus('<span class="spinner"></span>Saving your drawing…');
-      // Empty canvas → clear any saved drawing; otherwise send the PNG overlay.
-      const blank = document.createElement('canvas');
-      blank.width = canvas.width; blank.height = canvas.height;
-      const isEmpty = canvas.toDataURL() === blank.toDataURL();
-      const dataUrl = isEmpty ? null : canvas.toDataURL('image/png');
-      try {
-        const res = await fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/drawing', {
-          method: 'PUT',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ drawing: dataUrl }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && data.ok) {
-          book = data.book;
-          setStatus(dataUrl ? 'Your drawing is saved! 🖍️' : 'Drawing cleared.');
-          render();
-          return;
-        }
-        const f = friendlyError(res, data);
-        setStatus(f.text, f.cls);
-        save.disabled = false;
-      } catch {
-        setStatus('Could not reach the server. Check your connection and try again.', 'error');
-        save.disabled = false;
-      }
-    });
   }
 
   // "Suggest image prompt": translate story words into a concrete "Draw ..."
@@ -2118,12 +1927,11 @@ function readerClientJs(): string {
     wrap.className = 'regen';
     const toggle = document.createElement('button');
     toggle.type = 'button';
-    toggle.className = 'linkbtn';
+    toggle.className = 'readbtn';
     toggle.textContent = '🖌️ Change this picture';
     wrap.appendChild(toggle);
 
     toggle.addEventListener('click', () => {
-      closeDrawTool(); // no drawing while changing the picture
       right.innerHTML = ''; // the form takes the picture's place until done
 
       const pic = buildPictureForm({
@@ -2195,17 +2003,22 @@ function readerClientJs(): string {
     const t = musicTarget(kind, index);
     const has = !!t.existing();
     const wrap = document.createElement('div');
-    wrap.className = 'readrow musicrow';
+    wrap.className = 'musicstack';
+    const row1 = document.createElement('div');
+    row1.className = 'readrow';
     const toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.className = 'readbtn music-btn';
     toggle.textContent = has ? '🎼 Change background music' : '🎼 Add background music';
     toggle.addEventListener('click', () => openMusicDialog(t));
-    wrap.appendChild(toggle);
+    row1.appendChild(toggle);
+    wrap.appendChild(row1);
     if (has) {
+      const row2 = document.createElement('div');
+      row2.className = 'readrow';
       const remove = document.createElement('button');
       remove.type = 'button';
-      remove.className = 'linkbtn danger';
+      remove.className = 'readbtn remove-music';
       remove.textContent = '✕ Remove background music';
       remove.addEventListener('click', async () => {
         if (!confirm('Remove the background music from ' + t.what + '?')) return;
@@ -2227,7 +2040,8 @@ function readerClientJs(): string {
           remove.disabled = false;
         }
       });
-      wrap.appendChild(remove);
+      row2.appendChild(remove);
+      wrap.appendChild(row2);
     }
     return wrap;
   }
