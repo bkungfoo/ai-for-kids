@@ -216,6 +216,7 @@ const CLIENT_HELPERS_JS = `
       return { text: data.message || "Let's try a different idea — keep it friendly and safe!", cls: 'blocked' };
     }
     if (res.status === 401) return { text: 'Your session ended. <a href="/login">Sign in again</a>.', cls: 'error' };
+    if (res.status === 409 && data && data.error) return { text: data.error, cls: 'blocked' };
     if (res.status === 501) return { text: "The picture tool isn't set up yet. Ask a grown-up to add the image key.", cls: 'error' };
     if (res.status === 503) return { text: 'Lots of people are creating right now — please try again in a moment.', cls: 'error' };
     return { text: 'Something went wrong. Please try again.', cls: 'error' };
@@ -2194,9 +2195,12 @@ function readerClientJs(): string {
         });
     }
 
+    let jobInFlight = false; // belt-and-suspenders: the server refuses doubles too
     gen.addEventListener('click', async () => {
+      if (jobInFlight) return;
       const prompt = ta.value.trim();
       if (!prompt) { setStatus('Tell me how the music should feel first! 🎼', 'blocked'); return; }
+      jobInFlight = true;
       gen.disabled = true;
       candBox.innerHTML = '';
       workingEl.hidden = false;
@@ -2213,6 +2217,7 @@ function readerClientJs(): string {
           setStatus(f.text, f.cls);
           workingEl.hidden = true;
           gen.disabled = false;
+          jobInFlight = false;
           return;
         }
         const jobId = data.jobId;
@@ -2226,6 +2231,7 @@ function readerClientJs(): string {
             pollTimer = null;
             workingEl.hidden = true;
             gen.disabled = false;
+            jobInFlight = false;
             gen.textContent = '🔁 Regenerate';
             if (jd.state === 'done') {
               showCandidates(jobId, jd.candidates || 0);
@@ -2237,6 +2243,7 @@ function readerClientJs(): string {
             pollTimer = null;
             workingEl.hidden = true;
             gen.disabled = false;
+            jobInFlight = false;
             setStatus('Lost track of the music — please try again.', 'error');
           }
         }, 4000);
@@ -2244,6 +2251,7 @@ function readerClientJs(): string {
         setStatus('Could not reach the server. Check your connection and try again.', 'error');
         workingEl.hidden = true;
         gen.disabled = false;
+        jobInFlight = false;
       }
     });
 

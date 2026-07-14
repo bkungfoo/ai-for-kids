@@ -1016,6 +1016,15 @@ booksApiRouter.post(
       return;
     }
 
+    // One generation at a time per book: pressing the button twice (or on two
+    // devices) must never queue a second paid job while one is running.
+    for (const other of musicJobs.values()) {
+      if (other.owner === currentUser(req) && other.bookId === bookId && other.state === 'working') {
+        res.status(409).json({ ok: false, error: 'A song is already being made for this book — wait for it to finish!' });
+        return;
+      }
+    }
+
     pruneMusicJobs();
     const description =
       `${CHILD_SAFE_MUSIC_PREAMBLE} Instrumental background music (no vocals) for a ` +
@@ -1203,6 +1212,15 @@ booksApiRouter.post(
         verdict: { severity: verdict.severity, categories: verdict.categories },
       });
       return;
+    }
+
+    // One generation at a time per book: pressing the button twice (or on two
+    // devices) must never queue a second paid job while one is running.
+    for (const other of musicJobs.values()) {
+      if (other.owner === currentUser(req) && other.bookId === bookId && other.state === 'working') {
+        res.status(409).json({ ok: false, error: 'A song is already being made for this book — wait for it to finish!' });
+        return;
+      }
     }
 
     pruneMusicJobs();
