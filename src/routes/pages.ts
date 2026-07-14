@@ -946,6 +946,7 @@ function readerClientJs(): string {
 
   function stopReading() {
     readAllMode = false;
+    clearNarrationDelay(); // vocals scheduled but not started yet? cancel them
     haltPlayback();
     stopAllBg(); // manual stop silences the music (and any fade) immediately
   }
@@ -964,9 +965,14 @@ function readerClientJs(): string {
   // (read-all waits for the fade before flipping). Manual stops and page
   // flips silence everything immediately.
   const BG_VOLUME = 0.22; // the words stay on top
-  const BG_FADE_MS = 5000;
+  const BG_FADE_MS = 3500;      // fade out over 0–3.5s after the vocals end
+  const BG_LEAD_IN_MS = 1000;   // music starts 1s before the vocals
   let bgMusic = null;   // playing under the current narration
   let fadingBg = null;  // { audio, timer } — post-narration fade in progress
+  let narrationDelay = null; // pending lead-in timer before the vocals start
+  function clearNarrationDelay() {
+    if (narrationDelay) { clearTimeout(narrationDelay); narrationDelay = null; }
+  }
 
   function startBgMusic(url) {
     stopAllBg();
@@ -989,8 +995,8 @@ function readerClientJs(): string {
   }
 
   /**
-   * Called when a page's narration finishes on its own: let the music play on
-   * for BG_FADE_MS, ramping the volume down to silence. Returns a handle whose
+   * Called when a page's narration finishes on its own: the music plays on,
+   * ramping down to silence over 0–BG_FADE_MS. Returns a handle whose
    * wait(cb) fires once the fade is over — immediately when there is nothing
    * to fade — so read-all can hold the page flip for it.
    */
@@ -1126,22 +1132,36 @@ function readerClientJs(): string {
     curReadBtn = btn;
     curReadStart = () => start();
     function start() {
+      clearNarrationDelay();
       haltPlayback();
       btn.classList.add('reading');
       btn.textContent = '⏹ Stop reading';
-      startBgMusic(page.music
+      const musicUrl = page.music
         ? '/v1/books/' + bookId + '/pages/' + pageIndex + '/music-audio'
-        : null); // this page's background music (if any)
-      narratePage(pageIndex, page, el, btn, label, () => {
-        // Narration finished on its own: let the music fade out (~5s). In
+        : null;
+      startBgMusic(musicUrl); // this page's background music (if any)
+      const speak = () => narratePage(pageIndex, page, el, btn, label, () => {
+        // Narration finished on its own: the music fades out over 3.5s. In
         // read-all, the page flip waits for the fade to finish.
         const fade = beginBgFade();
         if (reading && reading.btn === btn) haltPlayback();
         if (readAllMode) fade.wait(() => { if (readAllMode) advanceReadAll(); });
       });
+      if (musicUrl) {
+        // Let the music set the scene for a second before the vocals begin.
+        narrationDelay = setTimeout(() => { narrationDelay = null; speak(); }, BG_LEAD_IN_MS);
+      } else {
+        speak();
+      }
     }
     btn.addEventListener('click', () => {
-      if (reading && reading.btn === btn) { stopReading(); return; }
+      // Stop works even during the 1s music lead-in (vocals not started yet).
+      if (narrationDelay || (reading && reading.btn === btn)) {
+        stopReading();
+        btn.classList.remove('reading');
+        btn.textContent = label;
+        return;
+      }
       readAllMode = false; // a single-page read cancels any read-all run
       start();
     });
@@ -1180,9 +1200,20 @@ function readerClientJs(): string {
       readAllMode = true;
       btn.classList.add('reading');
       btn.textContent = '⏹ Stop reading';
-      // The cover's background music (if any) plays under the intro, and
-      // fades out before the first page turn — same rules as story pages.
+      // The cover's background music (if any) plays under the intro, starting
+      // 1s before the vocals, and fades out before the first page turn — same
+      // rules as story pages.
+      const musicStartedAt = book.coverMusic ? Date.now() : 0;
       startBgMusic(book.coverMusic ? '/v1/books/' + bookId + '/cover/music-audio' : null);
+      const afterLeadIn = (cb) => {
+        if (!musicStartedAt) { cb(); return; }
+        const wait = Math.max(0, BG_LEAD_IN_MS - (Date.now() - musicStartedAt));
+        if (!wait) { cb(); return; }
+        narrationDelay = setTimeout(() => {
+          narrationDelay = null;
+          if (readAllMode) cb();
+        }, wait);
+      };
       const onDone = () => {
         const fade = beginBgFade();
         if (reading && reading.btn === btn) haltPlayback();
@@ -1191,7 +1222,9 @@ function readerClientJs(): string {
       // The narrator voice reads the cover intro too: cached audio -> server
       // narration -> browser voice only as the last resort.
       if (book.introNarration) {
-        reading = { btn: btn, btnLabel: label, audio: playAudio(book.introNarration, onDone) };
+        afterLeadIn(() => {
+          reading = { btn: btn, btnLabel: label, audio: playAudio(book.introNarration, onDone) };
+        });
         return;
       }
       try {
@@ -1200,16 +1233,20 @@ function readerClientJs(): string {
         if (res.ok && data.ok) {
           book.introNarration = data.narration; // cache client-side too
           if (!readAllMode) return; // stopped while we were fetching
-          reading = { btn: btn, btnLabel: label, audio: playAudio(data.narration, onDone) };
+          afterLeadIn(() => {
+            reading = { btn: btn, btnLabel: label, audio: playAudio(data.narration, onDone) };
+          });
           return;
         }
       } catch {}
       if (!readAllMode) return; // stopped while we were fetching
-      const by = authorsLine(book.authors);
-      const intro = book.title + (by ? '. Written by ' + by + '.' : '.');
-      const r = speakText(intro, null, onDone);
-      if (r) reading = { btn: btn, btnLabel: label, utter: r.utter, restore: r.restore };
-      else readAllMode = false;
+      afterLeadIn(() => {
+        const by = authorsLine(book.authors);
+        const intro = book.title + (by ? '. Written by ' + by + '.' : '.');
+        const r = speakText(intro, null, onDone);
+        if (r) reading = { btn: btn, btnLabel: label, utter: r.utter, restore: r.restore };
+        else readAllMode = false;
+      });
     });
     return row;
   }
