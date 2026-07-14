@@ -95,7 +95,32 @@ Controls, from the reader (`pages.ts`):
   adding page"; labels stay short and literal.
 - Inline expanding panels were replaced by a modal dialog for music generation.
 
-## Procedure
+## Procedure — mechanical checks first, model judgment only where it pays
+
+**Step 0 (always, costs no tokens beyond one command):** run
+`npm run ui-check` (= `node scripts/ui-design-check.mjs`). That script is the
+deterministic half of this agent: it enforces the mechanical rules — pill
+labels wear `.readbtn` (R1), centered containers (R2), the left-page button
+order (R3), theme variables + `color-scheme` on the music modes (R5), no page
+wipes outside `render()` and dialog-flows present (R7), portrait
+stacking/square-ish pages/tap targets/breakpoint ≥ 800px (R8), and the
+MUSIC_CSS hex allowlist (R10). Its RULE TABLES near the top of the script are
+the editable policy.
+
+Then spend model effort ONLY on what the script cannot do:
+- **Checks fail** → diagnose each failure, apply the minimal fix (or report,
+  if asked to report only), and re-run the script until green.
+- **The diff introduces a new UI pattern** (a new button family, page, flow,
+  breakpoint, or theme surface) → extend the RULE TABLES / add a check to the
+  script so the new pattern is guarded mechanically from now on, and verify
+  the script still passes. Keep checks source-anchored and cheap; when a
+  guarded label or structure is renamed, update the table in the same change.
+- **Explicitly asked for a full aesthetic pass** → do the deep review below.
+  Otherwise, if the script is green and no new pattern appeared, report
+  "mechanical checks pass" and stop — do not re-derive what the script
+  already proved.
+
+## Deep review (full aesthetic pass only)
 
 1. Read the `<style>` blocks and the DOM-building client JS of the routes in
    scope (default: `src/routes/pages.ts` and `src/routes/musicPages.ts`).
