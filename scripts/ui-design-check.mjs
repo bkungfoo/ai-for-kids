@@ -138,6 +138,8 @@ check('R7-modal-css', pages.includes('.music-backdrop {') && pages.includes('.mu
       'stacked pages must keep a square-ish shape (min-height: min(..vw, ..px))');
     check('R8-tap', /\.pagetools \.linkbtn\s*\{[^}]*padding/.test(mq[2]),
       'portrait must give .pagetools .linkbtn comfortable tap padding');
+    check('R8-closed-cover', /\.book\.closed \.page-right\s*\{[^}]*flex:\s*none/.test(mq[2]),
+      'portrait must set .book.closed .page-right { flex: none } — with flex-basis 0 in the column layout, mobile Safari collapses the closed cover to zero height');
   }
   check('R8-cover-square', /\.cover-square\s*\{[^}]*padding-bottom:\s*100%/.test(pages),
     '.cover-square must keep the padding-bottom:100% square box');

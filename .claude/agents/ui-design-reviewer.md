@@ -94,6 +94,12 @@ Controls, from the reader (`pages.ts`):
 - "Never mind — don't add a page here" was renamed to the plainer "Cancel
   adding page"; labels stay short and literal.
 - Inline expanding panels were replaced by a modal dialog for music generation.
+- The closed cover vanished on phone portrait: the portrait column layout gave
+  the cover page a zero height flex-basis (`flex: 1 1 0` now sizes the main
+  axis = height) and mobile Safari collapsed it inside the book's
+  `overflow: hidden`. Fixed with `.book.closed .page-right { flex: none }` in
+  the portrait media query — pages whose only height source is a
+  padding-bottom box must be content-sized in column layouts.
 
 ## Procedure — mechanical checks first, model judgment only where it pays
 

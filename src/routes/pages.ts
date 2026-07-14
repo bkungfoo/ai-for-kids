@@ -853,6 +853,12 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
           .page { min-height: min(92vw, 440px); }
           /* Comfortable tap targets for small fingers. */
           .pagetools .linkbtn { font-size: 13px; padding: 8px 6px; }
+          /* The closed cover's only height source is the .cover-square
+             padding-bottom box. In the column layout, flex: 1 1 0 makes the
+             page's HEIGHT basis zero and mobile Safari collapses it to
+             nothing (clipped by the book's overflow: hidden) — size the
+             cover page by its content instead. */
+          .book.closed .page-right { flex: none; }
         }
       </style>`,
     }) + `<script>${CLIENT_HELPERS_JS}${AUTHORS_JS}${readerClientJs()}</script>`,
