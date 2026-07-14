@@ -104,6 +104,8 @@ export interface Book {
    * Absent on older books — those use the configured default.
    */
   imageEngine?: ImageEngine;
+  /** Instrumental background music for the COVER (plays under the intro). */
+  coverMusic?: PageMusic | null;
   pages: BookPage[];
   /**
    * Cached read-aloud audio for the cover intro ("Title. Written by …") —
@@ -195,6 +197,20 @@ export async function updateAuthors(id: string, authors: string[]): Promise<Book
   if (!book) return undefined;
   book.authors = authors;
   delete book.introNarration; // the "written by" line changed
+  book.updatedAt = new Date().toISOString();
+  await save(book);
+  return book;
+}
+
+/** Set (or clear) the cover's background music. */
+export async function updateCoverMusic(
+  id: string,
+  music: PageMusic | null,
+): Promise<Book | undefined> {
+  const book = await getBook(id);
+  if (!book) return undefined;
+  if (music) book.coverMusic = music;
+  else delete book.coverMusic;
   book.updatedAt = new Date().toISOString();
   await save(book);
   return book;
@@ -417,5 +433,7 @@ export async function deleteBook(id: string): Promise<boolean> {
     const music = page.music ? pageMusicFile(page.music.id) : null;
     if (music) await unlink(music).catch(() => {});
   }
+  const coverMusic = book?.coverMusic ? pageMusicFile(book.coverMusic.id) : null;
+  if (coverMusic) await unlink(coverMusic).catch(() => {});
   return true;
 }

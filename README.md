@@ -185,9 +185,10 @@ picture prompts (e.g. "a small mouse wearing a red cape") and feelings turned
 into visible actions — and fills the prompt box (overwriting whatever was
 there). Nothing is painted until the child clicks **🖌️ Paint it!**.
 
-**Background music.** In edit mode, once a page has its words and picture, a
-🎼 button (`/v1/books/:id/pages/:index/music-job` + friends) adds instrumental
-background music: an AI-suggested prompt describing the scene's mood (Gemini,
+**Background music.** In edit mode, a 🎼 button on the LEFT side of each page
+(once it has words and picture) — and on the front cover (`/v1/books/:id/cover/*`,
+stored as `book.coverMusic`, playing under the cover intro) — adds instrumental
+background music via a dialog that floats in front of the book: an AI-suggested prompt describing the scene's mood (Gemini,
 editable, output-moderated; the edited prompt is input-moderated) generates
 two takes via AIMusicAPI — always `make_instrumental` — which the child
 previews in place and picks one (or regenerates, cancels, or removes existing

@@ -25,6 +25,7 @@ import {
   unpublishBook,
   updateAuthors,
   updateCover,
+  updateCoverMusic,
   updateIntroNarration,
   updatePage,
   pageMusicFile,
@@ -1150,6 +1151,147 @@ booksApiRouter.get(
     try {
       const info = await stat(file);
       res.set('content-type', page.music.mimeType);
+      res.set('content-length', String(info.size));
+      res.set('cache-control', 'private, max-age=3600');
+      createReadStream(file).pipe(res);
+    } catch {
+      res.status(404).json({ ok: false, error: 'Music audio not found' });
+    }
+  }),
+);
+
+// --- Background music for the COVER (same flow, stored on the book) --------------
+
+booksApiRouter.post(
+  '/:id/cover/suggest-music-prompt',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+    const outcome = await runGuardedGeneration(suggestMusicPromptProvider, { book });
+    res.status(outcome.status).json(outcome.body);
+  }),
+);
+
+booksApiRouter.post(
+  '/:id/cover/music-job',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const prompt = requireString(req.body, 'prompt', { maxLength: 400 }).trim();
+    if (!aiMusicConfigured()) {
+      res.status(501).json({ ok: false, error: 'The music maker is not configured yet' });
+      return;
+    }
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+
+    const verdict = await guardText([prompt], 'input');
+    if (!verdict.allowed) {
+      res.status(403).json({
+        ok: false,
+        blocked: true,
+        stage: 'input',
+        message: verdict.childMessage,
+        verdict: { severity: verdict.severity, categories: verdict.categories },
+      });
+      return;
+    }
+
+    pruneMusicJobs();
+    const description =
+      `${CHILD_SAFE_MUSIC_PREAMBLE} Instrumental background music (no vocals) for a ` +
+      `storybook page. ${prompt}`;
+    const taskId = await submitMusicTask(description, true);
+    const job: BookMusicJob = {
+      id: randomUUID(),
+      owner: currentUser(req),
+      bookId,
+      prompt,
+      state: 'working',
+      candidates: [],
+      createdAt: Date.now(),
+    };
+    musicJobs.set(job.id, job);
+    runBookMusicJob(job, taskId);
+    res.status(202).json({ ok: true, jobId: job.id });
+  }),
+);
+
+booksApiRouter.post(
+  '/:id/cover/music',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const jobId = requireString(req.body, 'jobId', { maxLength: 64 });
+    const choice = Number((req.body as { choice?: unknown }).choice);
+
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+
+    const job = musicJobs.get(jobId);
+    const candidate =
+      job && job.owner === currentUser(req) && job.bookId === bookId && job.state === 'done'
+        ? job.candidates[choice - 1]
+        : undefined;
+    if (!candidate) {
+      res.status(404).json({ ok: false, error: 'That music is no longer available — generate again!' });
+      return;
+    }
+
+    const musicId = await savePageMusicAudio(candidate.bytes);
+    const updated = await updateCoverMusic(bookId, {
+      id: musicId,
+      prompt: job!.prompt,
+      mimeType: candidate.mimeType,
+    });
+    musicJobs.delete(jobId);
+    res.json({ ok: true, book: updated });
+  }),
+);
+
+booksApiRouter.delete(
+  '/:id/cover/music',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+    const updated = await updateCoverMusic(bookId, null);
+    res.json({ ok: true, book: updated });
+  }),
+);
+
+booksApiRouter.get(
+  '/:id/cover/music-audio',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const book = await getBook(bookId);
+    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+      res.status(404).json({ ok: false, error: 'Not found' });
+      return;
+    }
+    const file = book.coverMusic ? pageMusicFile(book.coverMusic.id) : null;
+    if (!book.coverMusic || !file) {
+      res.status(404).json({ ok: false, error: 'No music on the cover' });
+      return;
+    }
+    try {
+      const info = await stat(file);
+      res.set('content-type', book.coverMusic.mimeType);
       res.set('content-length', String(info.size));
       res.set('cache-control', 'private, max-age=3600');
       createReadStream(file).pipe(res);

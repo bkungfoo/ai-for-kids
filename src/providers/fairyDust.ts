@@ -329,8 +329,8 @@ export const godmotherProvider: Provider<GodmotherRequest> = {
 
 export interface SuggestMusicRequest {
   book: Book;
-  /** The page getting background music. */
-  pageIndex: number;
+  /** The page getting background music — omit for the book's COVER. */
+  pageIndex?: number;
 }
 
 const MUSIC_SUGGEST_SCHEMA = {
@@ -363,14 +363,23 @@ export const suggestMusicPromptProvider: Provider<SuggestMusicRequest> = {
   async generate(req): Promise<GenerationResult> {
     const { apiKey, baseUrl } = config.providers.gemini;
     if (!apiKey) throw new ProviderNotConfiguredError('fairy dust');
-    const page = req.book.pages[req.pageIndex];
+    let target: string;
+    if (req.pageIndex === undefined) {
+      target =
+        "The music is for the book's FRONT COVER — an opening theme that captures the " +
+        'spirit and mood of the whole story.\n';
+    } else {
+      const page = req.book.pages[req.pageIndex];
+      target =
+        `The page getting background music is page ${req.pageIndex + 1}:\n` +
+        `Words: """${page?.text ?? ''}"""\n` +
+        (page?.imagePrompt ? `Picture: ${page.imagePrompt}\n` : '');
+    }
 
     const user =
       `Here is the story so far:\n\n${storyWithPictures(req.book)}\n\n` +
-      `The page getting background music is page ${req.pageIndex + 1}:\n` +
-      `Words: """${page?.text ?? ''}"""\n` +
-      (page?.imagePrompt ? `Picture: ${page.imagePrompt}\n` : '') +
-      '\nWrite the musicPrompt for this page.';
+      target +
+      '\nWrite the musicPrompt.';
 
     const raw = await callGemini(apiKey, baseUrl, MUSIC_DIRECTOR_PERSONA, user, MUSIC_SUGGEST_SCHEMA);
     const musicPrompt = pickString(raw, 'musicPrompt').slice(0, 300);

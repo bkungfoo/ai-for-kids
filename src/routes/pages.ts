@@ -814,6 +814,15 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .page input.revealed { animation: dustreveal 1s ease; }
         /* Background music (edit mode) */
         .readbtn.music-btn { background: #e6f2ec; border-color: #7ab89a; }
+        .musicrow { flex-wrap: wrap; }
+        /* The compose dialog floats in front of the book */
+        .music-backdrop { position: fixed; inset: 0; background: rgba(30,22,10,.55);
+          z-index: 60; display: flex; align-items: center; justify-content: center;
+          padding: 20px; }
+        .music-modal { background: #fdf9f0; border-radius: 14px; width: min(94vw, 540px);
+          max-height: 84vh; overflow-y: auto; padding: 20px 22px;
+          box-shadow: 0 24px 60px rgba(0,0,0,.45); }
+        .music-modal h3 { margin: 0 0 12px; font-size: 18px; color: #5a4632; }
         .music-panel label { display: block; font-size: 13px; font-weight: 700; color: #6b5d43;
           margin-bottom: 6px; }
         .music-panel textarea { width: 100%; min-height: 76px; font-family: inherit; font-size: 14px;
@@ -968,10 +977,10 @@ function readerClientJs(): string {
   let bgMusic = null;   // playing under the current narration
   let fadingBg = null;  // { audio, timer } — post-narration fade in progress
 
-  function startBgMusic(pageIndex, page) {
+  function startBgMusic(url) {
     stopAllBg();
-    if (!page || !page.music) return;
-    bgMusic = new Audio('/v1/books/' + bookId + '/pages/' + pageIndex + '/music-audio');
+    if (!url) return;
+    bgMusic = new Audio(url);
     bgMusic.loop = true;
     bgMusic.volume = BG_VOLUME;
     bgMusic.play().catch(() => {});
@@ -1129,7 +1138,9 @@ function readerClientJs(): string {
       haltPlayback();
       btn.classList.add('reading');
       btn.textContent = '⏹ Stop reading';
-      startBgMusic(pageIndex, page); // this page's background music (if any)
+      startBgMusic(page.music
+        ? '/v1/books/' + bookId + '/pages/' + pageIndex + '/music-audio'
+        : null); // this page's background music (if any)
       narratePage(pageIndex, page, el, btn, label, () => {
         // Narration finished on its own: let the music fade out (~5s). In
         // read-all, the page flip waits for the fade to finish.
@@ -1178,9 +1189,13 @@ function readerClientJs(): string {
       readAllMode = true;
       btn.classList.add('reading');
       btn.textContent = '⏹ Stop reading';
+      // The cover's background music (if any) plays under the intro, and
+      // fades out before the first page turn — same rules as story pages.
+      startBgMusic(book.coverMusic ? '/v1/books/' + bookId + '/cover/music-audio' : null);
       const onDone = () => {
+        const fade = beginBgFade();
         if (reading && reading.btn === btn) haltPlayback();
-        if (readAllMode) advanceReadAll();
+        if (readAllMode) fade.wait(() => { if (readAllMode) advanceReadAll(); });
       };
       // The narrator voice reads the cover intro too: cached audio -> server
       // narration -> browser voice only as the last resort.
@@ -1554,6 +1569,7 @@ function readerClientJs(): string {
       }
       right.appendChild(readAllControls());
       if (editable()) right.appendChild(coverRegenControls());
+      if (editable()) right.appendChild(musicControls('cover', null));
     } else if (spread === 1) {
       renderTitlePage();
     } else if (spread <= n + 1) {
@@ -1582,6 +1598,8 @@ function readerClientJs(): string {
       num.textContent = String(spread - 1);
       left.appendChild(num);
       left.appendChild(readRow(spread - 2, p, t));
+      // Background music (left side), once the page has words and picture.
+      if (editable() && p.text && p.image) left.appendChild(musicControls('page', spread - 2));
       if (editable()) left.appendChild(wordsEditControls(spread - 2, p, t));
       if (editable()) left.appendChild(pageToolsControls(spread - 2));
       if (p.image) {
@@ -1601,8 +1619,6 @@ function readerClientJs(): string {
         right.appendChild(noImage('No picture on this page'));
       }
       if (editable()) right.appendChild(regenControls(spread - 2, p));
-      // Background music, once the page has both its words and its picture.
-      if (editable() && p.text && p.image) right.appendChild(musicControls(spread - 2, p));
     } else {
       renderAddPage();
     }
@@ -2148,29 +2164,54 @@ function readerClientJs(): string {
     return wrap;
   }
 
-  // Background music (edit mode, once a page has words + picture): an
-  // AI-suggested, editable prompt generates two instrumental takes; the child
-  // previews both and picks one (or regenerates, cancels, or removes existing
-  // music). The chosen take plays softly under the narration.
-  function musicControls(pageIndex, page) {
+  // Background music (edit mode): controls live on the LEFT side of story
+  // pages and on the cover. Add/Change opens a modal DIALOG in front of the
+  // book (never stretching the page): an AI-suggested, editable prompt makes
+  // two instrumental takes; the child previews both and picks one, or
+  // regenerates, or cancels — the dialog closes on accept or cancel.
+  function musicTarget(kind, index) {
+    const base = '/v1/books/' + bookId;
+    if (kind === 'cover') {
+      return {
+        suggest: base + '/cover/suggest-music-prompt',
+        job: base + '/cover/music-job',
+        attach: base + '/cover/music',
+        remove: base + '/cover/music',
+        existing: function () { return book.coverMusic; },
+        what: 'the cover',
+      };
+    }
+    return {
+      suggest: base + '/pages/' + index + '/suggest-music-prompt',
+      job: base + '/pages/' + index + '/music-job',
+      attach: base + '/pages/' + index + '/music',
+      remove: base + '/pages/' + index + '/music',
+      existing: function () { return (book.pages[index] || {}).music; },
+      what: 'this page',
+    };
+  }
+
+  function musicControls(kind, index) {
+    const t = musicTarget(kind, index);
+    const has = !!t.existing();
     const wrap = document.createElement('div');
-    wrap.className = 'regen';
+    wrap.className = 'readrow musicrow';
     const toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.className = 'readbtn music-btn';
-    toggle.textContent = page.music ? '🎼 Change background music' : '🎼 Add background music';
+    toggle.textContent = has ? '🎼 Change background music' : '🎼 Add background music';
+    toggle.addEventListener('click', () => openMusicDialog(t));
     wrap.appendChild(toggle);
-    if (page.music) {
+    if (has) {
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.className = 'linkbtn danger';
-      remove.style.marginLeft = '10px';
       remove.textContent = '✕ Remove background music';
       remove.addEventListener('click', async () => {
-        if (!confirm('Remove the background music from this page?')) return;
+        if (!confirm('Remove the background music from ' + t.what + '?')) return;
         remove.disabled = true;
         try {
-          const res = await fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/music', { method: 'DELETE' });
+          const res = await fetch(t.remove, { method: 'DELETE' });
           const data = await res.json().catch(() => ({}));
           if (res.ok && data.ok) {
             book = data.book;
@@ -2188,21 +2229,36 @@ function readerClientJs(): string {
       });
       wrap.appendChild(remove);
     }
-    toggle.addEventListener('click', () => openMusicPanel(pageIndex, page, wrap));
     return wrap;
   }
 
-  function openMusicPanel(pageIndex, page, wrap) {
+  function openMusicDialog(t) {
     stopReading(); // no narration/music while composing new music
-    wrap.innerHTML = '';
-    wrap.className = 'regen music-panel';
+    let pollTimer = null;
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'music-backdrop';
+    const modal = document.createElement('div');
+    modal.className = 'music-modal music-panel';
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+
+    function close() {
+      if (pollTimer) clearInterval(pollTimer);
+      backdrop.remove();
+    }
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+
+    const h = document.createElement('h3');
+    h.textContent = '🎼 Background music for ' + t.what;
+    modal.appendChild(h);
 
     const label = document.createElement('label');
     label.textContent = 'What should the music feel like?';
-    wrap.appendChild(label);
+    modal.appendChild(label);
     const ta = document.createElement('textarea');
     ta.maxLength = 400;
-    wrap.appendChild(ta);
+    modal.appendChild(ta);
 
     const actions = document.createElement('div');
     actions.className = 'music-actions';
@@ -2214,29 +2270,31 @@ function readerClientJs(): string {
     cancel.type = 'button';
     cancel.className = 'linkbtn';
     cancel.textContent = '✕ Cancel';
-    cancel.addEventListener('click', () => { setStatus(''); render(); });
+    cancel.addEventListener('click', () => { setStatus(''); close(); });
     actions.appendChild(gen);
     actions.appendChild(cancel);
-    wrap.appendChild(actions);
+    modal.appendChild(actions);
 
     const workingEl = document.createElement('div');
     workingEl.className = 'music-working';
     workingEl.hidden = true;
     workingEl.innerHTML = '<span class="notes-anim">🎶</span><span>Composing… this takes a minute or two!</span>';
-    wrap.appendChild(workingEl);
+    modal.appendChild(workingEl);
 
     const candBox = document.createElement('div');
-    wrap.appendChild(candBox);
+    modal.appendChild(candBox);
 
     // Prefill: the existing prompt when changing music; otherwise ask the AI
     // for a prompt that fits the scene and mood (still fully editable).
-    if (page.music && page.music.prompt) {
-      ta.value = page.music.prompt;
+    const existing = t.existing();
+    if (existing && existing.prompt) {
+      ta.value = existing.prompt;
+      ta.focus();
     } else {
       ta.placeholder = '🎼 The music director is thinking…';
       ta.disabled = true;
       gen.disabled = true;
-      fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/suggest-music-prompt', { method: 'POST' })
+      fetch(t.suggest, { method: 'POST' })
         .then((res) => res.json().then((data) => ({ res, data })))
         .then(({ res, data }) => {
           if (res.ok && data.ok) ta.value = (data.result.musicPrompt || '').slice(0, 400);
@@ -2250,7 +2308,6 @@ function readerClientJs(): string {
         });
     }
 
-    let pollTimer = null;
     gen.addEventListener('click', async () => {
       const prompt = ta.value.trim();
       if (!prompt) { setStatus('Tell me how the music should feel first! 🎼', 'blocked'); return; }
@@ -2259,7 +2316,7 @@ function readerClientJs(): string {
       workingEl.hidden = false;
       setStatus('');
       try {
-        const res = await fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/music-job', {
+        const res = await fetch(t.job, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ prompt: prompt }),
@@ -2280,17 +2337,18 @@ function readerClientJs(): string {
             if (!jr.ok || !jd.ok) throw new Error('gone');
             if (jd.state === 'working') return;
             clearInterval(pollTimer);
+            pollTimer = null;
             workingEl.hidden = true;
             gen.disabled = false;
             gen.textContent = '🔁 Regenerate';
             if (jd.state === 'done') {
               showCandidates(jobId, jd.candidates || 0);
-              setStatus('Listen to both — pick the one that fits your page! 🎧');
             } else {
               setStatus(jd.message || 'The music maker had trouble — try again!', 'error');
             }
           } catch {
             clearInterval(pollTimer);
+            pollTimer = null;
             workingEl.hidden = true;
             gen.disabled = false;
             setStatus('Lost track of the music — please try again.', 'error');
@@ -2308,10 +2366,10 @@ function readerClientJs(): string {
       for (let n = 1; n <= count; n++) {
         const card = document.createElement('div');
         card.className = 'music-cand';
-        const t = document.createElement('div');
-        t.className = 'mc-title';
-        t.textContent = '🎵 Music ' + n;
-        card.appendChild(t);
+        const title = document.createElement('div');
+        title.className = 'mc-title';
+        title.textContent = '🎵 Music ' + n;
+        card.appendChild(title);
         const audio = document.createElement('audio');
         audio.controls = true;
         audio.preload = 'none';
@@ -2324,7 +2382,7 @@ function readerClientJs(): string {
         use.addEventListener('click', async () => {
           candBox.querySelectorAll('button').forEach((b) => { b.disabled = true; });
           try {
-            const res = await fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/music', {
+            const res = await fetch(t.attach, {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({ jobId: jobId, choice: n }),
@@ -2332,7 +2390,8 @@ function readerClientJs(): string {
             const data = await res.json().catch(() => ({}));
             if (res.ok && data.ok) {
               book = data.book;
-              setStatus('🎼 Background music added! It plays softly while the page is read aloud.');
+              close();
+              setStatus('🎼 Background music added! It plays softly while the words are read aloud.');
               render();
               return;
             }
