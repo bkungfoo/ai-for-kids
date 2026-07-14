@@ -709,9 +709,11 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .cta.cancel:hover { background: #737373; }
         .cta.cancel:disabled { background: #bdbdbd; }
         .pubnote { text-align: center; color: #5a4632; font-size: 13px; font-weight: 600; margin-top: 12px; }
-        /* Repaint-the-picture controls under a page's image */
-        .regen { margin-top: 10px; }
-        .regen form { flex-direction: column; gap: 8px; height: auto; }
+        /* Repaint-the-picture controls under a page's image. The toggle pill
+           is centered like every other button row; an opened form goes back
+           to left-aligned text. */
+        .regen { margin-top: 10px; text-align: center; }
+        .regen form { text-align: left; flex-direction: column; gap: 8px; height: auto; }
         .regen input[type=text] { background: transparent; border: 1px dashed #cbbfa4; font-size: 14px; }
         .regen .cta { padding: 9px 14px; font-size: 14px; margin-top: 8px; }
         /* Read-aloud */
@@ -797,7 +799,6 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         @keyframes gmshimmer { from { background-position: 0% 0; } to { background-position: 300% 0; } }
         .magic-done { color: inherit; background: none; filter: none;
           transition: color .5s ease; }
-        .words-edit { text-align: center; }
         .page input.revealed { animation: dustreveal 1s ease; }
         /* Background music (edit mode) */
         .readbtn.music-btn { background: #e6f2ec; border-color: #7ab89a; }
@@ -837,19 +838,20 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .pagetools .danger { color: #8a1c1c; }
         /* The End page */
         .the-end-art { margin: auto; font-size: 56px; text-align: center; letter-spacing: 8px; }
-        .cta.end { background: #8a5a00; margin-top: 10px; }
-        .cta.end:hover { background: #6f4800; }
-        .cta.end:disabled { background: #b9a37a; }
         /* Add-a-page form lives ON the book pages */
         .page form { display: flex; flex-direction: column; height: 100%; }
         .page label { font-size: 13px; font-weight: 700; color: #6b5d43; margin-bottom: 6px; }
         .page textarea { flex: 1; min-height: 220px; background: transparent; border: 1px dashed #cbbfa4;
           font-family: Georgia, 'Times New Roman', serif; font-size: 17px; line-height: 1.6; }
         .page input[type=text] { background: transparent; border: 1px dashed #cbbfa4; }
-        @media (max-width: 720px) {
+        @media (max-width: 820px) {
           .book { flex-direction: column; }
           .spine { width: auto; height: 3px; }
-          .page { min-height: 260px; }
+          /* Stacked pages keep a square-ish page shape (like .cover-square),
+             while still growing when a form needs more room. */
+          .page { min-height: min(92vw, 440px); }
+          /* Comfortable tap targets for small fingers. */
+          .pagetools .linkbtn { font-size: 13px; padding: 8px 6px; }
         }
       </style>`,
     }) + `<script>${CLIENT_HELPERS_JS}${AUTHORS_JS}${readerClientJs()}</script>`,
@@ -1705,28 +1707,41 @@ function readerClientJs(): string {
     wrap.appendChild(toggle);
 
     toggle.addEventListener('click', () => {
-      toggle.remove();
+      // A dialog in front of the book — the cover stays put behind it.
+      const dlg = openTaskDialog('🖌️ Change the cover');
       const form = document.createElement('form');
       const label = document.createElement('label');
       label.textContent = 'What should the new cover look like?';
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.maxLength = 1000;
-      input.required = true;
-      input.value = book.coverPrompt || '';
+      const ta = document.createElement('textarea');
+      ta.className = 'prompt';
+      ta.rows = 4;
+      ta.maxLength = 1000;
+      ta.required = true;
+      ta.value = book.coverPrompt || '';
       const btn = document.createElement('button');
       btn.type = 'submit';
       btn.className = 'cta';
+      btn.style.marginTop = '12px';
       btn.textContent = '🖌️ Repaint the cover';
-      form.appendChild(label); form.appendChild(input); form.appendChild(btn);
-      wrap.appendChild(form);
-      input.focus();
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'linkbtn';
+      cancel.textContent = '✕ Cancel';
+      cancel.addEventListener('click', () => dlg.close());
+      const actions = document.createElement('div');
+      actions.className = 'music-actions';
+      actions.appendChild(btn);
+      actions.appendChild(cancel);
+      form.appendChild(label); form.appendChild(ta); form.appendChild(actions);
+      dlg.modal.appendChild(form);
+      ta.focus();
 
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const coverPrompt = input.value.trim();
+        const coverPrompt = ta.value.trim();
         if (!coverPrompt) return;
         btn.disabled = true;
+        cancel.disabled = true;
         setStatus('<span class="spinner"></span>Painting a new cover…');
         try {
           const res = await fetch('/v1/books/' + bookId + '/cover', {
@@ -1737,6 +1752,7 @@ function readerClientJs(): string {
           const data = await res.json().catch(() => ({}));
           if (res.ok && data.ok) {
             book = data.book;
+            dlg.close();
             setStatus("Here's your new cover! 🎉");
             render();
             return;
@@ -1744,9 +1760,11 @@ function readerClientJs(): string {
           const f = friendlyError(res, data);
           setStatus(f.text, f.cls);
           btn.disabled = false;
+          cancel.disabled = false;
         } catch {
           setStatus('Could not reach the server. Check your connection and try again.', 'error');
           btn.disabled = false;
+          cancel.disabled = false;
         }
       });
     });
@@ -1932,14 +1950,14 @@ function readerClientJs(): string {
     wrap.appendChild(toggle);
 
     toggle.addEventListener('click', () => {
-      right.innerHTML = ''; // the form takes the picture's place until done
-
+      // A dialog in front of the book — the current picture stays visible.
+      const dlg = openTaskDialog('🖌️ Change this picture');
       const pic = buildPictureForm({
         initialPrompt: page.imagePrompt || '',
         getWords: () => (page.text || '').trim(),
         cancel: {
-          label: '↩️ Cancel — keep the old picture',
-          onCancel: () => { setStatus(''); render(); },
+          label: '✕ Cancel',
+          onCancel: () => { setStatus(''); dlg.close(); },
         },
         onSubmit: async (imagePrompt, ctl) => {
           ctl.setBusy(true);
@@ -1953,6 +1971,7 @@ function readerClientJs(): string {
             const data = await res.json().catch(() => ({}));
             if (res.ok && data.ok) {
               book = data.book;
+              dlg.close();
               setStatus("Here's the new picture! 🎉");
               render();
               return;
@@ -1966,7 +1985,7 @@ function readerClientJs(): string {
           }
         },
       });
-      right.appendChild(pic.form);
+      dlg.modal.appendChild(pic.form);
       pic.promptEl.focus();
     });
     return wrap;
@@ -1977,6 +1996,22 @@ function readerClientJs(): string {
   // book (never stretching the page): an AI-suggested, editable prompt makes
   // two instrumental takes; the child previews both and picks one, or
   // regenerates, or cancels — the dialog closes on accept or cancel.
+  /** A floating dialog in front of the book (shared chrome for task flows). */
+  function openTaskDialog(titleText) {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'music-backdrop';
+    const modal = document.createElement('div');
+    modal.className = 'music-modal music-panel';
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+    const close = () => backdrop.remove();
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+    const h = document.createElement('h3');
+    h.textContent = titleText;
+    modal.appendChild(h);
+    return { modal: modal, close: close };
+  }
+
   function musicTarget(kind, index) {
     const base = '/v1/books/' + bookId;
     if (kind === 'cover') {
@@ -2298,7 +2333,7 @@ function readerClientJs(): string {
     wrap.className = 'regen';
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'cta';
+    btn.className = 'readbtn theend';
     btn.textContent = '✍️ Keep writing the story';
     wrap.appendChild(btn);
     btn.addEventListener('click', async () => {
@@ -2350,6 +2385,8 @@ function readerClientJs(): string {
     const storyEl = editor.ta;
     left.appendChild(editor.form);
     if (inserting) {
+      const cancelRow = document.createElement('div');
+      cancelRow.className = 'readrow';
       const cancelIns = document.createElement('button');
       cancelIns.type = 'button';
       cancelIns.className = 'linkbtn';
@@ -2361,7 +2398,8 @@ function readerClientJs(): string {
         setStatus('');
         render();
       });
-      left.appendChild(cancelIns);
+      cancelRow.appendChild(cancelIns);
+      left.appendChild(cancelRow);
     }
 
     // Right page: the shared picture form; Paint makes the page.
