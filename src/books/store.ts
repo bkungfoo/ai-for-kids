@@ -28,12 +28,6 @@ export interface BookPage {
   imagePrompt: string;
   /** The illustration shown on the right-hand page. */
   image: BookImage | null;
-  /**
-   * The child's own pen doodle, a transparent PNG laid OVER the illustration
-   * (the AI picture underneath is kept intact). Only allowed once the page has
-   * both words and a picture. Null/absent means nothing drawn.
-   */
-  drawing?: BookImage | null;
   /** True for the closing "The End" page. */
   isEnd?: boolean;
   /**
@@ -307,7 +301,7 @@ export async function movePage(
   return book;
 }
 
-/** Insert a copy of a story page right after it (picture, drawing and all). */
+/** Insert a copy of a story page right after it (picture and all). */
 export async function duplicatePage(id: string, index: number): Promise<Book | undefined> {
   const book = await getBook(id);
   if (!book) return undefined;

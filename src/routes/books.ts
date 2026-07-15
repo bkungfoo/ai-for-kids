@@ -212,21 +212,6 @@ function parseImageEngine(body: unknown): ImageEngine | undefined {
   return raw;
 }
 
-/**
- * A page-drawing payload: `{ drawing }` is either a PNG data URL (the child's
- * doodle overlay) or null to erase it. Rejects anything that isn't a
- * base64-encoded PNG data URL.
- */
-function parseDrawing(body: unknown): BookImage | null {
-  const value = (body as { drawing?: unknown } | undefined)?.drawing;
-  if (value === null || value === undefined) return null; // clear the drawing
-  if (typeof value !== 'string') throw new ValidationError('"drawing" must be a data URL or null');
-  if (value.length > 5_000_000) throw new ValidationError('That drawing is too large to save');
-  const match = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(value);
-  if (!match) throw new ValidationError('"drawing" must be a PNG data URL');
-  return { mimeType: 'image/png', dataBase64: match[1]! };
-}
-
 /** 409 helper: published books are frozen. */
 function publishedConflict(res: Response): void {
   res.status(409).json({ ok: false, error: 'This book is published and can no longer be changed' });
@@ -530,38 +515,6 @@ booksApiRouter.patch(
     }
     // Pre-generate the read-aloud audio for the new words.
     warmNarration(bookId, index, text);
-    res.json({ ok: true, book: updated, pageIndex: index });
-  }),
-);
-
-// --- Save (or clear) the child's pen drawing over a page's picture -------------
-booksApiRouter.put(
-  '/:id/pages/:index/drawing',
-  asyncHandler(async (req, res) => {
-    const bookId = req.params.id ?? '';
-    const index = Number.parseInt(req.params.index ?? '', 10);
-    const drawing = parseDrawing(req.body);
-
-    const book = await getOwnedBook(bookId, currentUser(req));
-    const page = Number.isInteger(index) && index >= 0 ? book?.pages[index] : undefined;
-    if (!book || !page) {
-      res.status(404).json({ ok: false, error: 'Page not found' });
-      return;
-    }
-    if (book.status === 'published') return publishedConflict(res);
-    // Drawing is only offered once a page has both its words and its picture.
-    if (page.isEnd || !page.text || !page.image) {
-      res.status(409).json({ ok: false, error: 'This page cannot be drawn on yet' });
-      return;
-    }
-
-    // The overlay is the child's own pen strokes (no AI, no text), so it isn't
-    // run through the generation-safety pipeline.
-    const updated = await updatePage(bookId, index, { drawing });
-    if (!updated) {
-      res.status(404).json({ ok: false, error: 'Page not found' });
-      return;
-    }
     res.json({ ok: true, book: updated, pageIndex: index });
   }),
 );

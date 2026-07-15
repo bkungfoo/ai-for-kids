@@ -659,10 +659,7 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .pagenum { margin-top: 14px; text-align: center; color: #b3a789; font-size: 12px; }
         .page-right img { max-width: 100%; max-height: 420px; object-fit: contain; margin: auto;
           border-radius: 8px; }
-        /* Picture + optional pen-drawing overlay, kept exactly aligned. */
         .page-pic { position: relative; display: inline-block; line-height: 0; margin: auto; max-width: 100%; }
-        .page-pic .drawing-overlay { position: absolute; inset: 0; width: 100% !important;
-          height: 100% !important; max-height: none; margin: 0; pointer-events: none; }
         .no-image { margin: auto; color: #b3a789; font-size: 14px; text-align: center; }
         .booknav { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; }
         .navbtn { padding: 10px 16px; font-size: 14px; font-weight: 700; color: #5a4632;
@@ -1662,11 +1659,6 @@ function readerClientJs(): string {
         const ai = imgEl(p.image, p.imagePrompt);
         ai.className = 'ai-pic';
         picWrap.appendChild(ai);
-        if (p.drawing) {
-          const d = imgEl(p.drawing, 'your drawing');
-          d.className = 'drawing-overlay';
-          picWrap.appendChild(d);
-        }
         right.appendChild(picWrap);
       } else {
         right.appendChild(noImage('No picture on this page'));
