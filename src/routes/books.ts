@@ -896,6 +896,8 @@ interface BookMusicJob {
   id: string;
   owner: string | undefined;
   bookId: string;
+  /** Where the music will go: 'cover' or 'page:<index>' (client UI key). */
+  target: string;
   prompt: string;
   state: 'working' | 'done' | 'failed';
   message?: string;
@@ -1034,6 +1036,7 @@ booksApiRouter.post(
       id: randomUUID(),
       owner: currentUser(req),
       bookId,
+      target: `page:${index}`,
       prompt,
       state: 'working',
       candidates: [],
@@ -1065,6 +1068,36 @@ booksApiRouter.get('/:id/music-job/:jobId', (req: Request, res: Response) => {
     ...(job.message ? { message: job.message } : {}),
     ...(job.state === 'done' ? { candidates: job.candidates.length } : {}),
   });
+});
+
+// Active jobs for this book — lets a reloaded page restore its composing /
+// "Review background music" state (generation keeps running server-side).
+booksApiRouter.get('/:id/music-jobs', (req: Request, res: Response) => {
+  pruneMusicJobs();
+  const bookId = req.params.id ?? '';
+  const jobs = [];
+  for (const job of musicJobs.values()) {
+    if (job.owner !== currentUser(req) || job.bookId !== bookId || job.state === 'failed') continue;
+    jobs.push({
+      jobId: job.id,
+      target: job.target,
+      state: job.state,
+      ...(job.state === 'done' ? { candidates: job.candidates.length } : {}),
+    });
+  }
+  res.json({ ok: true, jobs });
+});
+
+// Discard a job without attaching either take ("Cancel" in the review
+// dialog) — frees the in-memory candidates right away instead of at TTL.
+booksApiRouter.delete('/:id/music-job/:jobId', (req: Request, res: Response) => {
+  const job = jobFor(req);
+  if (!job) {
+    res.status(404).json({ ok: false, error: 'Job not found' });
+    return;
+  }
+  musicJobs.delete(job.id);
+  res.json({ ok: true });
 });
 
 // Preview a candidate take before choosing (streamed from memory).
@@ -1232,6 +1265,7 @@ booksApiRouter.post(
       id: randomUUID(),
       owner: currentUser(req),
       bookId,
+      target: 'cover',
       prompt,
       state: 'working',
       candidates: [],

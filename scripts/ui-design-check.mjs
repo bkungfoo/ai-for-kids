@@ -40,6 +40,7 @@ const PILL_LABELS = [
   "'✏️ Edit text'",
   "'✍️ Keep writing the story'",
   "'✕ Remove background music'",
+  "'🎵 Review background music'",
 ];
 
 // R3: canonical row order inside the left story page's actionCluster call.

@@ -823,6 +823,9 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
           font-size: 14px; font-weight: 600; color: #2c6e8f; }
         .music-working .notes-anim { font-size: 20px; display: inline-block;
           animation: bob 1s ease-in-out infinite alternate; }
+        /* While composing, the line stands where the music buttons were —
+           centered like every other row on the page. */
+        .musicstack .music-working { justify-content: center; font-size: 13px; }
         @keyframes bob { from { transform: translateY(2px) rotate(-8deg); } to { transform: translateY(-4px) rotate(8deg); } }
         .music-cand { border: 1px solid #e0d6bd; background: #fdf9f0; border-radius: 10px;
           padding: 10px 12px; margin-top: 8px; }
@@ -2094,18 +2097,87 @@ function readerClientJs(): string {
     };
   }
 
+  // Background-music jobs keep running after the dialog closes, so the child
+  // can keep editing the book meanwhile. Keyed by 'cover' or 'page:<index>'
+  // (the same target string the server stores on the job). While 'working'
+  // the page shows the composing line instead of its music buttons; once
+  // 'ready' it shows "Review background music" until a take is chosen or the
+  // job is discarded.
+  const bgMusicJobs = {};
+  function musicKey(kind, index) { return kind === 'cover' ? 'cover' : 'page:' + index; }
+
+  // Swap just that page's music controls when its job changes state — never
+  // re-render the whole spread under the child's feet.
+  function refreshMusicControls(key) {
+    const el = document.querySelector('[data-music-key="' + key + '"]');
+    if (!el || !el.replaceWith) return; // that page isn't on screen right now
+    if (key === 'cover') el.replaceWith(musicControls('cover', null));
+    else el.replaceWith(musicControls('page', Number(key.slice(5))));
+  }
+
+  // Poll a submitted job in the background until it settles.
+  function startMusicJobWatch(key, jobId) {
+    bgMusicJobs[key] = { jobId: jobId, state: 'working' };
+    const timer = setInterval(async () => {
+      try {
+        const jr = await fetch('/v1/books/' + bookId + '/music-job/' + jobId);
+        const jd = await jr.json().catch(() => ({}));
+        if (!jr.ok || !jd.ok) throw new Error('gone');
+        if (jd.state === 'working') return;
+        clearInterval(timer);
+        if (jd.state === 'done') {
+          bgMusicJobs[key] = { jobId: jobId, state: 'ready', candidates: jd.candidates || 0 };
+          setStatus('🎼 The music is ready! Press “Review background music” to hear it.');
+        } else {
+          delete bgMusicJobs[key];
+          setStatus(jd.message || 'The music maker had trouble — try again!', 'error');
+        }
+        refreshMusicControls(key);
+      } catch {
+        clearInterval(timer);
+        delete bgMusicJobs[key];
+        setStatus('Lost track of the music — please try again.', 'error');
+        refreshMusicControls(key);
+      }
+    }, 4000);
+  }
+
   function musicControls(kind, index) {
     const t = musicTarget(kind, index);
-    const has = !!t.existing();
+    const key = musicKey(kind, index);
     const wrap = document.createElement('div');
     wrap.className = 'musicstack';
+    wrap.dataset.musicKey = key;
+    const job = bgMusicJobs[key];
+    if (job && job.state === 'working') {
+      // Composing continues quietly in the background: the music buttons make
+      // way for the status line until the takes are ready.
+      const line = document.createElement('div');
+      line.className = 'music-working';
+      line.innerHTML = '<span class="notes-anim">🎶</span><span>Composing… this takes a minute or two!</span>';
+      wrap.appendChild(line);
+      return wrap;
+    }
+    if (job && job.state === 'ready') {
+      const row = document.createElement('div');
+      row.className = 'readrow';
+      const review = document.createElement('button');
+      review.type = 'button';
+      review.className = 'readbtn music-btn';
+      review.textContent = '🎵 Review background music';
+      review.addEventListener('click', () => openMusicReviewDialog(t, key));
+      row.appendChild(review);
+      wrap.appendChild(row);
+      return wrap;
+    }
+    const has = !!t.existing();
     const row1 = document.createElement('div');
     row1.className = 'readrow';
     const toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.className = 'readbtn music-btn';
     toggle.textContent = has ? '🎼 Change background music' : '🎼 Add background music';
-    toggle.addEventListener('click', () => openMusicDialog(t));
+    toggle.addEventListener('click', () => openMusicDialog(t, key));
     row1.appendChild(toggle);
     wrap.appendChild(row1);
     if (has) {
@@ -2141,26 +2213,11 @@ function readerClientJs(): string {
     return wrap;
   }
 
-  function openMusicDialog(t) {
+  function openMusicDialog(t, key) {
     stopReading(); // no narration/music while composing new music
-    let pollTimer = null;
-
-    const backdrop = document.createElement('div');
-    backdrop.className = 'music-backdrop';
-    const modal = document.createElement('div');
-    modal.className = 'music-modal music-panel';
-    backdrop.appendChild(modal);
-    document.body.appendChild(backdrop);
-
-    function close() {
-      if (pollTimer) clearInterval(pollTimer);
-      backdrop.remove();
-    }
-    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
-
-    const h = document.createElement('h3');
-    h.textContent = '🎼 Background music for ' + t.what;
-    modal.appendChild(h);
+    const dlg = openTaskDialog('🎼 Background music for ' + t.what);
+    const modal = dlg.modal;
+    const close = dlg.close;
 
     const label = document.createElement('label');
     label.textContent = 'What should the music feel like?';
@@ -2183,15 +2240,6 @@ function readerClientJs(): string {
     actions.appendChild(gen);
     actions.appendChild(cancel);
     modal.appendChild(actions);
-
-    const workingEl = document.createElement('div');
-    workingEl.className = 'music-working';
-    workingEl.hidden = true;
-    workingEl.innerHTML = '<span class="notes-anim">🎶</span><span>Composing… this takes a minute or two!</span>';
-    modal.appendChild(workingEl);
-
-    const candBox = document.createElement('div');
-    modal.appendChild(candBox);
 
     // Prefill: the existing prompt when changing music; otherwise ask the AI
     // for a prompt that fits the scene and mood (still fully editable).
@@ -2224,8 +2272,6 @@ function readerClientJs(): string {
       if (!prompt) { setStatus('Tell me how the music should feel first! 🎼', 'blocked'); return; }
       jobInFlight = true;
       gen.disabled = true;
-      candBox.innerHTML = '';
-      workingEl.hidden = false;
       setStatus('');
       try {
         const res = await fetch(t.job, {
@@ -2237,92 +2283,105 @@ function readerClientJs(): string {
         if (!res.ok || !data.ok) {
           const f = friendlyError(res, data);
           setStatus(f.text, f.cls);
-          workingEl.hidden = true;
           gen.disabled = false;
           jobInFlight = false;
           return;
         }
-        const jobId = data.jobId;
-        pollTimer = setInterval(async () => {
-          try {
-            const jr = await fetch('/v1/books/' + bookId + '/music-job/' + jobId);
-            const jd = await jr.json().catch(() => ({}));
-            if (!jr.ok || !jd.ok) throw new Error('gone');
-            if (jd.state === 'working') return;
-            clearInterval(pollTimer);
-            pollTimer = null;
-            workingEl.hidden = true;
-            gen.disabled = false;
-            jobInFlight = false;
-            gen.textContent = '🔁 Regenerate';
-            if (jd.state === 'done') {
-              showCandidates(jobId, jd.candidates || 0);
-            } else {
-              setStatus(jd.message || 'The music maker had trouble — try again!', 'error');
-            }
-          } catch {
-            clearInterval(pollTimer);
-            pollTimer = null;
-            workingEl.hidden = true;
-            gen.disabled = false;
-            jobInFlight = false;
-            setStatus('Lost track of the music — please try again.', 'error');
-          }
-        }, 4000);
+        // The dialog's work is done: composing continues quietly in the
+        // background while the child keeps editing. The page's music buttons
+        // make way for the composing line until the takes are ready.
+        close();
+        startMusicJobWatch(key, data.jobId);
+        refreshMusicControls(key);
+        setStatus('🎶 Composing has begun! You can keep working on your book meanwhile.');
       } catch {
         setStatus('Could not reach the server. Check your connection and try again.', 'error');
-        workingEl.hidden = true;
         gen.disabled = false;
         jobInFlight = false;
       }
     });
+  }
 
-    function showCandidates(jobId, count) {
-      candBox.innerHTML = '';
-      for (let n = 1; n <= count; n++) {
-        const card = document.createElement('div');
-        card.className = 'music-cand';
-        const title = document.createElement('div');
-        title.className = 'mc-title';
-        title.textContent = '🎵 Music ' + n;
-        card.appendChild(title);
-        const audio = document.createElement('audio');
-        audio.controls = true;
-        audio.preload = 'none';
-        audio.src = '/v1/books/' + bookId + '/music-job/' + jobId + '/audio/' + n;
-        card.appendChild(audio);
-        const use = document.createElement('button');
-        use.type = 'button';
-        use.className = 'cta';
-        use.textContent = '✅ Use this one';
-        use.addEventListener('click', async () => {
-          candBox.querySelectorAll('button').forEach((b) => { b.disabled = true; });
-          try {
-            const res = await fetch(t.attach, {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ jobId: jobId, choice: n }),
-            });
-            const data = await res.json().catch(() => ({}));
-            if (res.ok && data.ok) {
-              book = data.book;
-              close();
-              setStatus('🎼 Background music added! It plays softly while the words are read aloud.');
-              render();
-              return;
-            }
-            const f = friendlyError(res, data);
-            setStatus(f.text, f.cls);
-            candBox.querySelectorAll('button').forEach((b) => { b.disabled = false; });
-          } catch {
-            setStatus('Could not reach the server. Check your connection and try again.', 'error');
-            candBox.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+  // Review a finished job: hear both takes and pick one — or cancel to keep
+  // things exactly as they are. Either way the dialog closes and the page
+  // gets its normal music buttons back.
+  function openMusicReviewDialog(t, key) {
+    stopReading();
+    const job = bgMusicJobs[key];
+    if (!job) return;
+    const dlg = openTaskDialog('🎼 Background music for ' + t.what);
+    const modal = dlg.modal;
+    const close = dlg.close;
+
+    const label = document.createElement('label');
+    label.textContent = 'Pick the music you like best!';
+    modal.appendChild(label);
+
+    const candBox = document.createElement('div');
+    modal.appendChild(candBox);
+    for (let n = 1; n <= (job.candidates || 2); n++) {
+      const card = document.createElement('div');
+      card.className = 'music-cand';
+      const title = document.createElement('div');
+      title.className = 'mc-title';
+      title.textContent = '🎵 Music ' + n;
+      card.appendChild(title);
+      const audio = document.createElement('audio');
+      audio.controls = true;
+      audio.preload = 'none';
+      audio.src = '/v1/books/' + bookId + '/music-job/' + job.jobId + '/audio/' + n;
+      card.appendChild(audio);
+      const use = document.createElement('button');
+      use.type = 'button';
+      use.className = 'cta';
+      use.textContent = '✅ Use this one';
+      use.addEventListener('click', async () => {
+        modal.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+        try {
+          const res = await fetch(t.attach, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ jobId: job.jobId, choice: n }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok) {
+            book = data.book;
+            delete bgMusicJobs[key];
+            close();
+            setStatus('🎼 Background music added! It plays softly while the words are read aloud.');
+            render();
+            return;
           }
-        });
-        card.appendChild(use);
-        candBox.appendChild(card);
-      }
+          const f = friendlyError(res, data);
+          setStatus(f.text, f.cls);
+          modal.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+        } catch {
+          setStatus('Could not reach the server. Check your connection and try again.', 'error');
+          modal.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+        }
+      });
+      card.appendChild(use);
+      candBox.appendChild(card);
     }
+
+    const actions = document.createElement('div');
+    actions.className = 'music-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'linkbtn';
+    cancel.textContent = '✕ Cancel — no new music';
+    cancel.addEventListener('click', async () => {
+      cancel.disabled = true;
+      // Let the server drop the unused takes right away; losing this call is
+      // harmless (the job times out on its own).
+      try { await fetch('/v1/books/' + bookId + '/music-job/' + job.jobId, { method: 'DELETE' }); } catch {}
+      delete bgMusicJobs[key];
+      close();
+      setStatus('Okay — no new music. 🎼');
+      refreshMusicControls(key);
+    });
+    actions.appendChild(cancel);
+    modal.appendChild(actions);
   }
 
   // Page tools (edit mode): move / insert after / copy / remove this page.
@@ -2709,6 +2768,16 @@ function readerClientJs(): string {
       }
       book = data.book;
       mine = !!data.mine;
+      // Music generation lives on the server: restore any job still composing
+      // (or waiting for review) so a reload doesn't lose the page's state.
+      try {
+        const mj = await fetch('/v1/books/' + bookId + '/music-jobs');
+        const md = await mj.json().catch(() => ({}));
+        for (const j of (mj.ok && md.ok && md.jobs) || []) {
+          if (j.state === 'done') bgMusicJobs[j.target] = { jobId: j.jobId, state: 'ready', candidates: j.candidates || 0 };
+          else startMusicJobWatch(j.target, j.jobId);
+        }
+      } catch {}
       // A book that was already finished when opened starts as a pure reader;
       // one still being written continues in creation (edit) mode.
       editMode = !finished();
