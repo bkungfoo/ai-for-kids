@@ -688,8 +688,6 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .cover-fallback { position: relative; width: 100%; height: 0; padding-bottom: 100%; flex: none; }
         .cover-fallback .book-title { position: absolute; inset: 0; display: grid;
           place-items: center; padding: 30px; text-align: center; margin: 0; }
-        /* "Change the cover" sits on a paper strip below the full-bleed cover art */
-        .book.closed .page-right .cover-regen { padding: 12px 16px 16px; position: relative; z-index: 2; }
         /* Title page ("written by" / "illustrated by") */
         .titlepage-heading { font-family: Georgia, 'Times New Roman', serif; font-style: italic;
           color: #8a7d63; font-size: 16px; text-align: center; margin: auto 0 10px; }
@@ -724,8 +722,10 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .readbtn:hover { background: #f2e9d6; }
         .readbtn.reading { background: #8a5a00; border-color: #8a5a00; color: #fff; }
         .w.said { background: #ffe9a8; border-radius: 4px; }
-        /* On the closed cover the read button sits on a paper strip below the art */
-        .book.closed .page-right .readrow { padding: 12px 16px 4px; position: relative; z-index: 2; }
+        /* On the closed cover all the buttons share one paper strip below the
+           art; the rows inside keep the standard .readrow spacing, so button
+           gaps match every other page. */
+        .book.closed .page-right .cover-actions { padding: 2px 16px 14px; position: relative; z-index: 2; }
         /* Fairy dust */
         .page { position: relative; }
         .dust-overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden;
@@ -1573,6 +1573,16 @@ function readerClientJs(): string {
   }
 
 
+  // Every page's action buttons are placed through this one cluster, so
+  // vertical spacing between rows comes from the same shared rules on every
+  // page (cover included). Falsy rows are skipped.
+  function actionCluster(rows, extraClass) {
+    const box = document.createElement('div');
+    box.className = 'actions' + (extraClass ? ' ' + extraClass : '');
+    for (const r of rows) if (r) box.appendChild(r);
+    return box;
+  }
+
   function render() {
     if (!advancing) stopReading();
     curReadBtn = null;
@@ -1602,9 +1612,11 @@ function readerClientJs(): string {
         fb.appendChild(h);
         right.appendChild(fb);
       }
-      right.appendChild(readAllControls());
-      if (editable()) right.appendChild(coverRegenControls());
-      if (editable()) right.appendChild(musicControls('cover', null));
+      right.appendChild(actionCluster([
+        readAllControls(),
+        editable() ? coverRegenControls() : null,
+        editable() ? musicControls('cover', null) : null,
+      ], 'cover-actions'));
     } else if (spread === 1) {
       renderTitlePage();
     } else if (spread <= n + 1) {
@@ -1619,8 +1631,10 @@ function readerClientJs(): string {
         art.className = 'the-end-art';
         art.textContent = '✨🎉✨';
         right.appendChild(art);
-        left.appendChild(readRow(spread - 2, p, h));
-        if (editable()) left.appendChild(endPageControls());
+        left.appendChild(actionCluster([
+          readRow(spread - 2, p, h),
+          editable() ? endPageControls() : null,
+        ]));
         return;
       }
       navlabel.textContent = 'Page ' + (spread - 1) + ' of ' + n;
@@ -1632,11 +1646,13 @@ function readerClientJs(): string {
       num.className = 'pagenum';
       num.textContent = String(spread - 1);
       left.appendChild(num);
-      left.appendChild(readRow(spread - 2, p, t));
-      if (editable()) left.appendChild(wordsEditControls(spread - 2, p, t));
-      // Background music (left side), once the page has words and picture.
-      if (editable() && p.text && p.image) left.appendChild(musicControls('page', spread - 2));
-      if (editable()) left.appendChild(pageToolsControls(spread - 2));
+      left.appendChild(actionCluster([
+        readRow(spread - 2, p, t),
+        editable() ? wordsEditControls(spread - 2, p, t) : null,
+        // Background music, once the page has words and picture.
+        editable() && p.text && p.image ? musicControls('page', spread - 2) : null,
+        editable() ? pageToolsControls(spread - 2) : null,
+      ]));
       if (p.image) {
         const picWrap = document.createElement('div');
         picWrap.className = 'page-pic';

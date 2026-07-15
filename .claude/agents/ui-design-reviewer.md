@@ -36,6 +36,11 @@ Controls, from the reader (`pages.ts`):
   one. Buttons stack **vertically, one row each**, in a fixed order on the
   reader's left page: Read to me → Edit text → Add/Change background music →
   Remove background music (if present) → page-tools row.
+- **Action clusters** (`actionCluster()` in the reader's client JS): every
+  page — cover, story pages, The End — places its action rows through this
+  one helper, so vertical rhythm comes from the shared `.readrow` rules.
+  A page appending action rows directly (or styling its own row padding) is
+  a violation.
 - **Modals** (`.music-backdrop`/`.music-modal`): flows that generate content
   open a dialog in front of the book; they do not stretch the page.
 - Music maker (`musicPages.ts`): `.chip` pickers, `.cta` actions, per-mode CSS
@@ -94,6 +99,11 @@ Controls, from the reader (`pages.ts`):
 - "Never mind — don't add a page here" was renamed to the plainer "Cancel
   adding page"; labels stay short and literal.
 - Inline expanding panels were replaced by a modal dialog for music generation.
+- The cover's buttons sat 26–36px apart while every other page's rows sit
+  8–10px apart, because each cover row carried its own "paper strip" padding.
+  Fixed by grouping them in one padded `.cover-actions` container so the rows
+  inside keep the shared `.readrow` spacing — strip padding belongs on the
+  group, never on the rows.
 - The closed cover vanished on phone portrait: the portrait column layout gave
   the cover page a zero height flex-basis (`flex: 1 1 0` now sizes the main
   axis = height) and mobile Safari collapsed it inside the book's
@@ -112,6 +122,15 @@ wipes outside `render()` and dialog-flows present (R7), portrait
 stacking/square-ish pages/tap targets/breakpoint ≥ 800px (R8), and the
 MUSIC_CSS hex allowlist (R10). Its RULE TABLES near the top of the script are
 the editable policy.
+
+When a change touches button layout or spacing, also run
+`npm run ui-spacing-check` — it renders the reader in a real headless
+chromium and asserts the pill-button gaps in the action cluster are
+IDENTICAL on the cover (edit mode) and on a story page (edit mode), each
+within the shared 6–14px rhythm. One-time setup:
+`npx playwright-core install chromium-headless-shell` (plus system libs
+libnspr4/libnss3/libasound2t64). It boots its own server on port 5199 with a
+throwaway data dir, so it never touches live data.
 
 Then spend model effort ONLY on what the script cannot do:
 - **Checks fail** → diagnose each failure, apply the minimal fix (or report,

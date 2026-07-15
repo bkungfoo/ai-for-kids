@@ -42,12 +42,12 @@ const PILL_LABELS = [
   "'✕ Remove background music'",
 ];
 
-// R3: canonical order of appendChild calls on the reader's left story page.
+// R3: canonical row order inside the left story page's actionCluster call.
 const LEFT_PAGE_ORDER = [
-  'left.appendChild(readRow(',
-  'left.appendChild(wordsEditControls(',
-  "left.appendChild(musicControls('page'",
-  'left.appendChild(pageToolsControls(',
+  'readRow(spread - 2, p, t),',
+  '? wordsEditControls(spread - 2',
+  "? musicControls('page', spread - 2)",
+  '? pageToolsControls(spread - 2)',
 ];
 
 // R6: generate-flows that must open a floating dialog (never reshape pages).
@@ -99,6 +99,18 @@ for (const label of PILL_LABELS) {
   }
   check('R3', ok, `left-page appendChild order must be: ${LEFT_PAGE_ORDER.join(' -> ')}`);
 }
+
+// R3: uniform row spacing — the closed cover's buttons sit on ONE padded
+// strip (.cover-actions); per-row padding overrides once made cover button
+// gaps 26–36px vs the standard 8–10px everywhere else.
+check('R3-cover-strip', /\.book\.closed \.page-right \.cover-actions\s*\{[^}]*padding/.test(pages),
+  'closed cover must group its buttons in a padded .cover-actions strip');
+check('R3-cover-rows-plain',
+  !/\.book\.closed \.page-right \.readrow\s*\{/.test(pages) && !/\.book\.closed \.page-right \.cover-regen\s*\{/.test(pages),
+  'cover rows must not carry their own padding — vertical spacing comes from the shared .readrow/.regen rules');
+check('R3-cluster',
+  pages.includes('right.appendChild(actionCluster([') && (pages.match(/left\.appendChild\(actionCluster\(\[/g) || []).length >= 2,
+  'every page must place its action rows through actionCluster() — cover, story pages, and The End page');
 
 // R6/R7: layout stability — page wipes only inside render(); generate-flows
 // use the floating dialog.
