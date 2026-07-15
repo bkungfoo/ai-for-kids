@@ -2169,7 +2169,18 @@ function readerClientJs(): string {
     toggle.type = 'button';
     toggle.className = 'readbtn music-btn';
     toggle.textContent = has ? '🎼 Change background music' : '🎼 Add background music';
-    toggle.addEventListener('click', () => openMusicDialog(t, key));
+    toggle.addEventListener('click', () => {
+      // One song at a time per book: while another page's music is composing,
+      // say so here instead of opening a dialog that would only fail later
+      // (the status line is hidden behind a dialog in the foreground).
+      for (const k in bgMusicJobs) {
+        if (bgMusicJobs[k].state === 'working') {
+          setStatus('🎶 A song is already being made for this book — wait for it to finish!', 'blocked');
+          return;
+        }
+      }
+      openMusicDialog(t, key);
+    });
     row1.appendChild(toggle);
     wrap.appendChild(row1);
     if (has) {
