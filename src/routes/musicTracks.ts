@@ -160,6 +160,14 @@ musicApiRouter.post(
       return;
     }
     pruneJobs();
+    // One generation at a time per account — a double-press must never queue
+    // a second paid job while one is running.
+    for (const other of jobs.values()) {
+      if (other.owner === currentUser(req) && other.state === 'working') {
+        res.status(409).json({ ok: false, error: 'Your last song is still being made — wait for it to finish!' });
+        return;
+      }
+    }
 
     const prompt = optionalString(req.body, 'prompt', { maxLength: 500 })?.trim() ?? '';
     const styleId = optionalString(req.body, 'style', { maxLength: 20 });

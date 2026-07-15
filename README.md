@@ -185,20 +185,29 @@ picture prompts (e.g. "a small mouse wearing a red cape") and feelings turned
 into visible actions — and fills the prompt box (overwriting whatever was
 there). Nothing is painted until the child clicks **🖌️ Paint it!**.
 
+**Background music.** In edit mode, a 🎼 button on the LEFT side of each page
+(once it has words and picture) — and on the front cover (`/v1/books/:id/cover/*`,
+stored as `book.coverMusic`, playing under the cover intro) — adds instrumental
+background music via a dialog that floats in front of the book: an AI-suggested prompt describing the scene's mood (Gemini,
+editable, output-moderated; the edited prompt is input-moderated) generates
+two takes via AIMusicAPI — always `make_instrumental` — which the child
+previews in place and picks one (or regenerates, cancels, or removes existing
+music). The chosen mp3 lives under `data/books/music/` (`page.music`), streams
+through an authenticated owner-or-published route, and plays softly (looped,
+low volume) **only while narration is running** — flipping pages or stopping
+the narration stops it, and read-all switches it per page automatically.
+Duplicated pages don't copy music (files aren't reference-counted); deleting a
+book cleans up its referenced music files.
+
 **Page management.** In edit mode each page has tools to move it earlier/later
 (reordering never crosses the "The End" page), insert a new page before or
 after it (the illustration context — story-so-far and reference pictures — is
 built from the pages *before* the insert point), or delete it. (A duplicate
 endpoint also exists but is not surfaced in the UI.)
 
-**Draw on the pictures.** In edit mode, a page that already has both its words
-and its AI picture shows a pen palette (pen + colors, eraser, clear) so a child
-can doodle on top of the illustration. The doodle is saved as a separate
-transparent PNG overlay (`page.drawing`) — the AI picture underneath is kept
-intact — via `PUT /v1/books/:id/pages/:index/drawing` (owner-only; `null` clears
-it). It isn't run through the generation-safety pipeline since it's the child's
-own pen strokes (no AI, no text). Not offered while the "change the words" or
-"change this picture" forms are open.
+**Doodle overlays (legacy).** The draw-on-the-picture tool has been removed
+from the UI; drawings saved earlier (`page.drawing`) still display over their
+pictures, and the API endpoint remains.
 
 Safety: titles and story text are moderated as *input* before being stored
 (they are displayed back); every illustration runs the full pipeline (input

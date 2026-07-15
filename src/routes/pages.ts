@@ -216,6 +216,7 @@ const CLIENT_HELPERS_JS = `
       return { text: data.message || "Let's try a different idea — keep it friendly and safe!", cls: 'blocked' };
     }
     if (res.status === 401) return { text: 'Your session ended. <a href="/login">Sign in again</a>.', cls: 'error' };
+    if (res.status === 409 && data && data.error) return { text: data.error, cls: 'blocked' };
     if (res.status === 501) return { text: "The picture tool isn't set up yet. Ask a grown-up to add the image key.", cls: 'error' };
     if (res.status === 503) return { text: 'Lots of people are creating right now — please try again in a moment.', cls: 'error' };
     return { text: 'Something went wrong. Please try again.', cls: 'error' };
@@ -658,23 +659,7 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .pagenum { margin-top: 14px; text-align: center; color: #b3a789; font-size: 12px; }
         .page-right img { max-width: 100%; max-height: 420px; object-fit: contain; margin: auto;
           border-radius: 8px; }
-        /* Picture + optional pen-drawing overlay, kept exactly aligned. */
         .page-pic { position: relative; display: inline-block; line-height: 0; margin: auto; max-width: 100%; }
-        .page-pic .drawing-overlay { position: absolute; inset: 0; width: 100% !important;
-          height: 100% !important; max-height: none; margin: 0; pointer-events: none; }
-        .draw-canvas { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 8px;
-          touch-action: none; cursor: crosshair; }
-        /* Pen palette */
-        .draw-tool .palette { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
-        .draw-tool .swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid #cbbfa4;
-          cursor: pointer; padding: 0; }
-        .draw-tool .swatch[data-color="#ffffff"] { border-color: #b3a789; }
-        .draw-tool .tool.active { outline: 3px solid #2c6e8f; outline-offset: 1px; }
-        .draw-tool .eraser, .draw-tool .tool:not(.swatch) { font-size: 13px; font-weight: 600;
-          padding: 5px 10px; border-radius: 8px; border: 1px solid #cbbfa4; background: #fdf9f0;
-          color: #5a4632; cursor: pointer; }
-        .draw-tool .draw-actions { display: flex; gap: 12px; align-items: center; margin-top: 10px; }
-        .draw-tool .draw-actions .cta { padding: 9px 14px; font-size: 14px; margin: 0; }
         .no-image { margin: auto; color: #b3a789; font-size: 14px; text-align: center; }
         .booknav { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; }
         .navbtn { padding: 10px 16px; font-size: 14px; font-weight: 700; color: #5a4632;
@@ -700,8 +685,6 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .cover-fallback { position: relative; width: 100%; height: 0; padding-bottom: 100%; flex: none; }
         .cover-fallback .book-title { position: absolute; inset: 0; display: grid;
           place-items: center; padding: 30px; text-align: center; margin: 0; }
-        /* "Change the cover" sits on a paper strip below the full-bleed cover art */
-        .book.closed .page-right .cover-regen { padding: 12px 16px 16px; position: relative; z-index: 2; }
         /* Title page ("written by" / "illustrated by") */
         .titlepage-heading { font-family: Georgia, 'Times New Roman', serif; font-style: italic;
           color: #8a7d63; font-size: 16px; text-align: center; margin: auto 0 10px; }
@@ -722,9 +705,11 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .cta.cancel:hover { background: #737373; }
         .cta.cancel:disabled { background: #bdbdbd; }
         .pubnote { text-align: center; color: #5a4632; font-size: 13px; font-weight: 600; margin-top: 12px; }
-        /* Repaint-the-picture controls under a page's image */
-        .regen { margin-top: 10px; }
-        .regen form { flex-direction: column; gap: 8px; height: auto; }
+        /* Repaint-the-picture controls under a page's image. The toggle pill
+           is centered like every other button row; an opened form goes back
+           to left-aligned text. */
+        .regen { margin-top: 10px; text-align: center; }
+        .regen form { text-align: left; flex-direction: column; gap: 8px; height: auto; }
         .regen input[type=text] { background: transparent; border: 1px dashed #cbbfa4; font-size: 14px; }
         .regen .cta { padding: 9px 14px; font-size: 14px; margin-top: 8px; }
         /* Read-aloud */
@@ -734,8 +719,10 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .readbtn:hover { background: #f2e9d6; }
         .readbtn.reading { background: #8a5a00; border-color: #8a5a00; color: #fff; }
         .w.said { background: #ffe9a8; border-radius: 4px; }
-        /* On the closed cover the read button sits on a paper strip below the art */
-        .book.closed .page-right .readrow { padding: 12px 16px 4px; position: relative; z-index: 2; }
+        /* On the closed cover all the buttons share one paper strip below the
+           art; the rows inside keep the standard .readrow spacing, so button
+           gaps match every other page. */
+        .book.closed .page-right .cover-actions { padding: 2px 16px 14px; position: relative; z-index: 2; }
         /* Fairy dust */
         .page { position: relative; }
         .dust-overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden;
@@ -810,8 +797,40 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         @keyframes gmshimmer { from { background-position: 0% 0; } to { background-position: 300% 0; } }
         .magic-done { color: inherit; background: none; filter: none;
           transition: color .5s ease; }
-        .words-edit { text-align: center; }
         .page input.revealed { animation: dustreveal 1s ease; }
+        /* Background music (edit mode) */
+        .readbtn.music-btn { background: #e6f2ec; border-color: #7ab89a; }
+        .musicstack { display: flex; flex-direction: column; }
+        .musicstack .readrow { margin-top: 8px; }
+        .readbtn.remove-music { background: #fbecec; border-color: #d9938e; color: #8a1c1c; }
+        /* The compose dialog floats in front of the book */
+        .music-backdrop { position: fixed; inset: 0; background: rgba(30,22,10,.55);
+          z-index: 60; display: flex; align-items: center; justify-content: center;
+          padding: 20px; }
+        .music-modal { background: #fdf9f0; border-radius: 14px; width: min(94vw, 540px);
+          max-height: 84vh; overflow-y: auto; padding: 20px 22px;
+          box-shadow: 0 24px 60px rgba(0,0,0,.45); }
+        .music-modal h3 { margin: 0 0 12px; font-size: 18px; color: #5a4632; }
+        .music-panel label { display: block; font-size: 13px; font-weight: 700; color: #6b5d43;
+          margin-bottom: 6px; }
+        .music-panel textarea { width: 100%; min-height: 76px; font-family: inherit; font-size: 14px;
+          line-height: 1.45; border: 1px dashed #cbbfa4; background: transparent; border-radius: 8px;
+          padding: 8px 10px; resize: vertical; }
+        .music-working { display: flex; align-items: center; gap: 8px; margin-top: 10px;
+          font-size: 14px; font-weight: 600; color: #2c6e8f; }
+        .music-working .notes-anim { font-size: 20px; display: inline-block;
+          animation: bob 1s ease-in-out infinite alternate; }
+        /* While composing, the line stands where the music buttons were —
+           centered like every other row on the page. */
+        .musicstack .music-working { justify-content: center; font-size: 13px; }
+        @keyframes bob { from { transform: translateY(2px) rotate(-8deg); } to { transform: translateY(-4px) rotate(8deg); } }
+        .music-cand { border: 1px solid #e0d6bd; background: #fdf9f0; border-radius: 10px;
+          padding: 10px 12px; margin-top: 8px; }
+        .music-cand .mc-title { font-weight: 800; font-size: 13px; color: #8a5a00; }
+        .music-cand audio { width: 100%; margin-top: 6px; }
+        .music-cand .cta { padding: 8px 12px; font-size: 13px; margin-top: 8px; }
+        .music-actions { display: flex; gap: 12px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+        .music-actions .cta { padding: 9px 14px; font-size: 14px; }
         /* Page tools (edit mode) */
         .pagetools { display: flex; flex-wrap: wrap; gap: 4px 10px; justify-content: center;
           margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e0d6bd; }
@@ -820,19 +839,26 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .pagetools .danger { color: #8a1c1c; }
         /* The End page */
         .the-end-art { margin: auto; font-size: 56px; text-align: center; letter-spacing: 8px; }
-        .cta.end { background: #8a5a00; margin-top: 10px; }
-        .cta.end:hover { background: #6f4800; }
-        .cta.end:disabled { background: #b9a37a; }
         /* Add-a-page form lives ON the book pages */
         .page form { display: flex; flex-direction: column; height: 100%; }
         .page label { font-size: 13px; font-weight: 700; color: #6b5d43; margin-bottom: 6px; }
         .page textarea { flex: 1; min-height: 220px; background: transparent; border: 1px dashed #cbbfa4;
           font-family: Georgia, 'Times New Roman', serif; font-size: 17px; line-height: 1.6; }
         .page input[type=text] { background: transparent; border: 1px dashed #cbbfa4; }
-        @media (max-width: 720px) {
+        @media (max-width: 820px) {
           .book { flex-direction: column; }
           .spine { width: auto; height: 3px; }
-          .page { min-height: 260px; }
+          /* Stacked pages keep a square-ish page shape (like .cover-square),
+             while still growing when a form needs more room. */
+          .page { min-height: min(92vw, 440px); }
+          /* Comfortable tap targets for small fingers. */
+          .pagetools .linkbtn { font-size: 13px; padding: 8px 6px; }
+          /* The closed cover's only height source is the .cover-square
+             padding-bottom box. In the column layout, flex: 1 1 0 makes the
+             page's HEIGHT basis zero and mobile Safari collapses it to
+             nothing (clipped by the book's overflow: hidden) — size the
+             cover page by its content instead. */
+          .book.closed .page-right { flex: none; }
         }
       </style>`,
     }) + `<script>${CLIENT_HELPERS_JS}${AUTHORS_JS}${readerClientJs()}</script>`,
@@ -927,7 +953,9 @@ function readerClientJs(): string {
 
   function stopReading() {
     readAllMode = false;
+    clearNarrationDelay(); // vocals scheduled but not started yet? cancel them
     haltPlayback();
+    stopAllBg(); // manual stop silences the music (and any fade) immediately
   }
   function haltPlayback() {
     if (!reading) return;
@@ -937,6 +965,71 @@ function readerClientJs(): string {
     if (r.utter && window.speechSynthesis) { try { speechSynthesis.cancel(); } catch {} }
     if (r.restore) r.restore();
     if (r.btn) { r.btn.classList.remove('reading'); r.btn.textContent = r.btnLabel; }
+  }
+
+  // Per-page background music: plays softly (looped) UNDER the narration.
+  // When narration ends NATURALLY the music lingers ~5s, fading to silence
+  // (read-all waits for the fade before flipping). Manual stops and page
+  // flips silence everything immediately.
+  const BG_VOLUME = 0.22; // the words stay on top
+  const BG_FADE_MS = 3500;      // fade out over 0–3.5s after the vocals end
+  const BG_LEAD_IN_MS = 1000;   // music starts 1s before the vocals
+  let bgMusic = null;   // playing under the current narration
+  let fadingBg = null;  // { audio, timer } — post-narration fade in progress
+  let narrationDelay = null; // pending lead-in timer before the vocals start
+  function clearNarrationDelay() {
+    if (narrationDelay) { clearTimeout(narrationDelay); narrationDelay = null; }
+  }
+
+  function startBgMusic(url) {
+    stopAllBg();
+    if (!url) return;
+    bgMusic = new Audio(url);
+    bgMusic.loop = true;
+    bgMusic.volume = BG_VOLUME;
+    bgMusic.play().catch(() => {});
+  }
+  function stopAllBg() {
+    if (fadingBg) {
+      clearInterval(fadingBg.timer);
+      try { fadingBg.audio.pause(); } catch {}
+      fadingBg = null;
+    }
+    if (bgMusic) {
+      try { bgMusic.pause(); } catch {}
+      bgMusic = null;
+    }
+  }
+
+  /**
+   * Called when a page's narration finishes on its own: the music plays on,
+   * ramping down to silence over 0–BG_FADE_MS. Returns a handle whose
+   * wait(cb) fires once the fade is over — immediately when there is nothing
+   * to fade — so read-all can hold the page flip for it.
+   */
+  function beginBgFade() {
+    if (!bgMusic) return { wait(cb) { if (cb) cb(); } };
+    const audio = bgMusic;
+    bgMusic = null; // out of startBgMusic's way; the fade owns it now
+    const startVol = audio.volume;
+    const steps = 25;
+    let step = 0;
+    let finished = false;
+    const waiting = [];
+    const timer = setInterval(() => {
+      step++;
+      if (step >= steps) {
+        clearInterval(timer);
+        try { audio.pause(); } catch {}
+        if (fadingBg && fadingBg.audio === audio) fadingBg = null;
+        finished = true;
+        while (waiting.length) waiting.shift()();
+      } else {
+        audio.volume = Math.max(0, startVol * (1 - step / steps));
+      }
+    }, BG_FADE_MS / steps);
+    fadingBg = { audio: audio, timer: timer };
+    return { wait(cb) { if (!cb) return; if (finished) cb(); else waiting.push(cb); } };
   }
 
   function pickVoice() {
@@ -1046,16 +1139,36 @@ function readerClientJs(): string {
     curReadBtn = btn;
     curReadStart = () => start();
     function start() {
+      clearNarrationDelay();
       haltPlayback();
       btn.classList.add('reading');
       btn.textContent = '⏹ Stop reading';
-      narratePage(pageIndex, page, el, btn, label, () => {
+      const musicUrl = page.music
+        ? '/v1/books/' + bookId + '/pages/' + pageIndex + '/music-audio'
+        : null;
+      startBgMusic(musicUrl); // this page's background music (if any)
+      const speak = () => narratePage(pageIndex, page, el, btn, label, () => {
+        // Narration finished on its own: the music fades out over 3.5s. In
+        // read-all, the page flip waits for the fade to finish.
+        const fade = beginBgFade();
         if (reading && reading.btn === btn) haltPlayback();
-        if (readAllMode) advanceReadAll();
+        if (readAllMode) fade.wait(() => { if (readAllMode) advanceReadAll(); });
       });
+      if (musicUrl) {
+        // Let the music set the scene for a second before the vocals begin.
+        narrationDelay = setTimeout(() => { narrationDelay = null; speak(); }, BG_LEAD_IN_MS);
+      } else {
+        speak();
+      }
     }
     btn.addEventListener('click', () => {
-      if (reading && reading.btn === btn) { stopReading(); return; }
+      // Stop works even during the 1s music lead-in (vocals not started yet).
+      if (narrationDelay || (reading && reading.btn === btn)) {
+        stopReading();
+        btn.classList.remove('reading');
+        btn.textContent = label;
+        return;
+      }
       readAllMode = false; // a single-page read cancels any read-all run
       start();
     });
@@ -1089,18 +1202,36 @@ function readerClientJs(): string {
     btn.addEventListener('click', async () => {
       if (reading && reading.btn === btn) { stopReading(); return; }
       haltPlayback();
+      stopAllBg(); // a fresh read-all starts silent (no leftover fade)
       if (!book.pages.length) { setStatus('This book has no pages to read yet!', 'blocked'); return; }
       readAllMode = true;
       btn.classList.add('reading');
       btn.textContent = '⏹ Stop reading';
+      // The cover's background music (if any) plays under the intro, starting
+      // 1s before the vocals, and fades out before the first page turn — same
+      // rules as story pages.
+      const musicStartedAt = book.coverMusic ? Date.now() : 0;
+      startBgMusic(book.coverMusic ? '/v1/books/' + bookId + '/cover/music-audio' : null);
+      const afterLeadIn = (cb) => {
+        if (!musicStartedAt) { cb(); return; }
+        const wait = Math.max(0, BG_LEAD_IN_MS - (Date.now() - musicStartedAt));
+        if (!wait) { cb(); return; }
+        narrationDelay = setTimeout(() => {
+          narrationDelay = null;
+          if (readAllMode) cb();
+        }, wait);
+      };
       const onDone = () => {
+        const fade = beginBgFade();
         if (reading && reading.btn === btn) haltPlayback();
-        if (readAllMode) advanceReadAll();
+        if (readAllMode) fade.wait(() => { if (readAllMode) advanceReadAll(); });
       };
       // The narrator voice reads the cover intro too: cached audio -> server
       // narration -> browser voice only as the last resort.
       if (book.introNarration) {
-        reading = { btn: btn, btnLabel: label, audio: playAudio(book.introNarration, onDone) };
+        afterLeadIn(() => {
+          reading = { btn: btn, btnLabel: label, audio: playAudio(book.introNarration, onDone) };
+        });
         return;
       }
       try {
@@ -1109,16 +1240,20 @@ function readerClientJs(): string {
         if (res.ok && data.ok) {
           book.introNarration = data.narration; // cache client-side too
           if (!readAllMode) return; // stopped while we were fetching
-          reading = { btn: btn, btnLabel: label, audio: playAudio(data.narration, onDone) };
+          afterLeadIn(() => {
+            reading = { btn: btn, btnLabel: label, audio: playAudio(data.narration, onDone) };
+          });
           return;
         }
       } catch {}
       if (!readAllMode) return; // stopped while we were fetching
-      const by = authorsLine(book.authors);
-      const intro = book.title + (by ? '. Written by ' + by + '.' : '.');
-      const r = speakText(intro, null, onDone);
-      if (r) reading = { btn: btn, btnLabel: label, utter: r.utter, restore: r.restore };
-      else readAllMode = false;
+      afterLeadIn(() => {
+        const by = authorsLine(book.authors);
+        const intro = book.title + (by ? '. Written by ' + by + '.' : '.');
+        const r = speakText(intro, null, onDone);
+        if (r) reading = { btn: btn, btnLabel: label, utter: r.utter, restore: r.restore };
+        else readAllMode = false;
+      });
     });
     return row;
   }
@@ -1438,6 +1573,16 @@ function readerClientJs(): string {
   }
 
 
+  // Every page's action buttons are placed through this one cluster, so
+  // vertical spacing between rows comes from the same shared rules on every
+  // page (cover included). Falsy rows are skipped.
+  function actionCluster(rows, extraClass) {
+    const box = document.createElement('div');
+    box.className = 'actions' + (extraClass ? ' ' + extraClass : '');
+    for (const r of rows) if (r) box.appendChild(r);
+    return box;
+  }
+
   function render() {
     if (!advancing) stopReading();
     curReadBtn = null;
@@ -1467,8 +1612,11 @@ function readerClientJs(): string {
         fb.appendChild(h);
         right.appendChild(fb);
       }
-      right.appendChild(readAllControls());
-      if (editable()) right.appendChild(coverRegenControls());
+      right.appendChild(actionCluster([
+        readAllControls(),
+        editable() ? coverRegenControls() : null,
+        editable() ? musicControls('cover', null) : null,
+      ], 'cover-actions'));
     } else if (spread === 1) {
       renderTitlePage();
     } else if (spread <= n + 1) {
@@ -1483,8 +1631,10 @@ function readerClientJs(): string {
         art.className = 'the-end-art';
         art.textContent = '✨🎉✨';
         right.appendChild(art);
-        left.appendChild(readRow(spread - 2, p, h));
-        if (editable()) left.appendChild(endPageControls());
+        left.appendChild(actionCluster([
+          readRow(spread - 2, p, h),
+          editable() ? endPageControls() : null,
+        ]));
         return;
       }
       navlabel.textContent = 'Page ' + (spread - 1) + ' of ' + n;
@@ -1496,22 +1646,20 @@ function readerClientJs(): string {
       num.className = 'pagenum';
       num.textContent = String(spread - 1);
       left.appendChild(num);
-      left.appendChild(readRow(spread - 2, p, t));
-      if (editable()) left.appendChild(wordsEditControls(spread - 2, p, t));
-      if (editable()) left.appendChild(pageToolsControls(spread - 2));
+      left.appendChild(actionCluster([
+        readRow(spread - 2, p, t),
+        editable() ? wordsEditControls(spread - 2, p, t) : null,
+        // Background music, once the page has words and picture.
+        editable() && p.text && p.image ? musicControls('page', spread - 2) : null,
+        editable() ? pageToolsControls(spread - 2) : null,
+      ]));
       if (p.image) {
         const picWrap = document.createElement('div');
         picWrap.className = 'page-pic';
         const ai = imgEl(p.image, p.imagePrompt);
         ai.className = 'ai-pic';
         picWrap.appendChild(ai);
-        if (p.drawing) {
-          const d = imgEl(p.drawing, 'your drawing');
-          d.className = 'drawing-overlay';
-          picWrap.appendChild(d);
-        }
         right.appendChild(picWrap);
-        if (editable()) right.appendChild(drawControls(spread - 2, p, picWrap, ai));
       } else {
         right.appendChild(noImage('No picture on this page'));
       }
@@ -1609,33 +1757,46 @@ function readerClientJs(): string {
     wrap.className = 'regen cover-regen';
     const toggle = document.createElement('button');
     toggle.type = 'button';
-    toggle.className = 'linkbtn';
+    toggle.className = 'readbtn';
     toggle.textContent = '🖌️ Change the cover';
     wrap.appendChild(toggle);
 
     toggle.addEventListener('click', () => {
-      toggle.remove();
+      // A dialog in front of the book — the cover stays put behind it.
+      const dlg = openTaskDialog('🖌️ Change the cover');
       const form = document.createElement('form');
       const label = document.createElement('label');
       label.textContent = 'What should the new cover look like?';
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.maxLength = 1000;
-      input.required = true;
-      input.value = book.coverPrompt || '';
+      const ta = document.createElement('textarea');
+      ta.className = 'prompt';
+      ta.rows = 4;
+      ta.maxLength = 1000;
+      ta.required = true;
+      ta.value = book.coverPrompt || '';
       const btn = document.createElement('button');
       btn.type = 'submit';
       btn.className = 'cta';
+      btn.style.marginTop = '12px';
       btn.textContent = '🖌️ Repaint the cover';
-      form.appendChild(label); form.appendChild(input); form.appendChild(btn);
-      wrap.appendChild(form);
-      input.focus();
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'linkbtn';
+      cancel.textContent = '✕ Cancel';
+      cancel.addEventListener('click', () => dlg.close());
+      const actions = document.createElement('div');
+      actions.className = 'music-actions';
+      actions.appendChild(btn);
+      actions.appendChild(cancel);
+      form.appendChild(label); form.appendChild(ta); form.appendChild(actions);
+      dlg.modal.appendChild(form);
+      ta.focus();
 
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const coverPrompt = input.value.trim();
+        const coverPrompt = ta.value.trim();
         if (!coverPrompt) return;
         btn.disabled = true;
+        cancel.disabled = true;
         setStatus('<span class="spinner"></span>Painting a new cover…');
         try {
           const res = await fetch('/v1/books/' + bookId + '/cover', {
@@ -1646,6 +1807,7 @@ function readerClientJs(): string {
           const data = await res.json().catch(() => ({}));
           if (res.ok && data.ok) {
             book = data.book;
+            dlg.close();
             setStatus("Here's your new cover! 🎉");
             render();
             return;
@@ -1653,9 +1815,11 @@ function readerClientJs(): string {
           const f = friendlyError(res, data);
           setStatus(f.text, f.cls);
           btn.disabled = false;
+          cancel.disabled = false;
         } catch {
           setStatus('Could not reach the server. Check your connection and try again.', 'error');
           btn.disabled = false;
+          cancel.disabled = false;
         }
       });
     });
@@ -1676,7 +1840,6 @@ function readerClientJs(): string {
 
     toggle.addEventListener('click', () => {
       toggle.remove();
-      closeDrawTool(); // no drawing while changing the words
       textEl.style.display = 'none'; // the editor takes the text's place
 
       // Ephemeral fairy-dust background state for this editing session.
@@ -1729,184 +1892,6 @@ function readerClientJs(): string {
       });
     });
     return wrap;
-  }
-
-  // Remove any open drawing tool (called when a change-words/picture form opens).
-  function closeDrawTool() {
-    const dt = document.getElementById('draw-tool');
-    if (dt) dt.remove();
-    const cv = document.getElementById('draw-canvas');
-    if (cv) cv.remove();
-  }
-
-  // Pen palette: draw on the page's picture with a pen (colors) and an eraser.
-  // Only offered on a fully-made page (has words AND a picture), in edit mode.
-  const PEN_COLORS = ['#e23b3b','#f39a12','#f7d21a','#3aa657','#2c6e8f','#7a5aa0','#3d2f1e','#ffffff'];
-  function drawControls(pageIndex, page, picWrap, aiImg) {
-    const wrap = document.createElement('div');
-    wrap.className = 'regen draw-tool';
-    wrap.id = 'draw-tool';
-    const toggle = document.createElement('button');
-    toggle.type = 'button';
-    toggle.className = 'linkbtn';
-    toggle.textContent = page.drawing ? '🖍️ Draw / erase on the picture' : '🖍️ Draw on the picture';
-    wrap.appendChild(toggle);
-
-    toggle.addEventListener('click', () => {
-      toggle.remove();
-      startDrawing(pageIndex, page, picWrap, aiImg, wrap);
-    });
-    return wrap;
-  }
-
-  function startDrawing(pageIndex, page, picWrap, aiImg, wrap) {
-    // Remove the static saved-drawing overlay: its pixels get loaded INTO the
-    // canvas below, so the canvas (which the pen and eraser act on) becomes the
-    // one and only drawing layer. Otherwise the old overlay would still show
-    // through and look impossible to erase.
-    const staleOverlay = picWrap.querySelector('.drawing-overlay');
-    if (staleOverlay) staleOverlay.remove();
-
-    // Size the canvas to the picture as it is displayed right now.
-    const rect = aiImg.getBoundingClientRect();
-    const w = Math.round(rect.width) || 400;
-    const h = Math.round(rect.height) || 400;
-    const canvas = document.createElement('canvas');
-    canvas.id = 'draw-canvas';
-    canvas.className = 'draw-canvas';
-    canvas.width = w;
-    canvas.height = h;
-    picWrap.appendChild(canvas);
-    const ctx = canvas.getContext('2d');
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-
-    // Continue from any existing drawing so the child can add to it.
-    if (page.drawing) {
-      const prev = new Image();
-      prev.onload = () => ctx.drawImage(prev, 0, 0, w, h);
-      prev.src = 'data:' + page.drawing.mimeType + ';base64,' + page.drawing.dataBase64;
-    }
-
-    let color = PEN_COLORS[0];
-    let erasing = false;
-    let drawing = false;
-
-    function pos(e) {
-      const r = canvas.getBoundingClientRect();
-      return { x: (e.clientX - r.left) * (canvas.width / r.width),
-               y: (e.clientY - r.top) * (canvas.height / r.height) };
-    }
-    function stroke(p) {
-      ctx.globalCompositeOperation = erasing ? 'destination-out' : 'source-over';
-      ctx.strokeStyle = color;
-      ctx.lineWidth = erasing ? 22 : 5;
-      ctx.lineTo(p.x, p.y);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-    }
-    canvas.addEventListener('pointerdown', (e) => {
-      drawing = true;
-      canvas.setPointerCapture(e.pointerId);
-      const p = pos(e);
-      ctx.beginPath();
-      ctx.moveTo(p.x, p.y);
-      stroke(p); // a tap leaves a dot
-    });
-    canvas.addEventListener('pointermove', (e) => { if (drawing) stroke(pos(e)); });
-    const end = () => { drawing = false; ctx.beginPath(); };
-    canvas.addEventListener('pointerup', end);
-    canvas.addEventListener('pointercancel', end);
-    canvas.addEventListener('pointerleave', end);
-
-    // --- palette ---
-    const pal = document.createElement('div');
-    pal.className = 'palette';
-    const swatches = [];
-    function selectTool(next) {
-      erasing = next === 'eraser';
-      pal.querySelectorAll('.tool').forEach((b) => b.classList.remove('active'));
-      if (next === 'eraser') eraserBtn.classList.add('active');
-      swatches.forEach((s) => { if (!erasing && s.dataset.color === color) s.classList.add('active'); });
-    }
-    for (const c of PEN_COLORS) {
-      const s = document.createElement('button');
-      s.type = 'button';
-      s.className = 'swatch tool';
-      s.dataset.color = c;
-      s.style.background = c;
-      s.title = 'Pen';
-      s.addEventListener('click', () => { color = c; selectTool('pen'); });
-      pal.appendChild(s);
-      swatches.push(s);
-    }
-    const eraserBtn = document.createElement('button');
-    eraserBtn.type = 'button';
-    eraserBtn.className = 'tool eraser';
-    eraserBtn.textContent = '🧽 Eraser';
-    eraserBtn.addEventListener('click', () => selectTool('eraser'));
-    pal.appendChild(eraserBtn);
-
-    const clearBtn = document.createElement('button');
-    clearBtn.type = 'button';
-    clearBtn.className = 'tool';
-    clearBtn.textContent = '🗑️ Clear';
-    clearBtn.addEventListener('click', () => {
-      if (!confirm('Erase your whole drawing on this page?')) return;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-    });
-    pal.appendChild(clearBtn);
-    wrap.appendChild(pal);
-
-    // --- save / cancel ---
-    const actions = document.createElement('div');
-    actions.className = 'draw-actions';
-    const save = document.createElement('button');
-    save.type = 'button';
-    save.className = 'cta';
-    save.textContent = '💾 Save my drawing';
-    const cancel = document.createElement('button');
-    cancel.type = 'button';
-    cancel.className = 'linkbtn';
-    cancel.textContent = 'Cancel';
-    actions.appendChild(save);
-    actions.appendChild(cancel);
-    wrap.appendChild(actions);
-
-    selectTool('pen'); // start on the first pen colour
-
-    cancel.addEventListener('click', () => { setStatus(''); render(); });
-
-    save.addEventListener('click', async () => {
-      save.disabled = true;
-      setStatus('<span class="spinner"></span>Saving your drawing…');
-      // Empty canvas → clear any saved drawing; otherwise send the PNG overlay.
-      const blank = document.createElement('canvas');
-      blank.width = canvas.width; blank.height = canvas.height;
-      const isEmpty = canvas.toDataURL() === blank.toDataURL();
-      const dataUrl = isEmpty ? null : canvas.toDataURL('image/png');
-      try {
-        const res = await fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/drawing', {
-          method: 'PUT',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ drawing: dataUrl }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && data.ok) {
-          book = data.book;
-          setStatus(dataUrl ? 'Your drawing is saved! 🖍️' : 'Drawing cleared.');
-          render();
-          return;
-        }
-        const f = friendlyError(res, data);
-        setStatus(f.text, f.cls);
-        save.disabled = false;
-      } catch {
-        setStatus('Could not reach the server. Check your connection and try again.', 'error');
-        save.disabled = false;
-      }
-    });
   }
 
   // "Suggest image prompt": translate story words into a concrete "Draw ..."
@@ -2015,20 +2000,19 @@ function readerClientJs(): string {
     wrap.className = 'regen';
     const toggle = document.createElement('button');
     toggle.type = 'button';
-    toggle.className = 'linkbtn';
+    toggle.className = 'readbtn';
     toggle.textContent = '🖌️ Change this picture';
     wrap.appendChild(toggle);
 
     toggle.addEventListener('click', () => {
-      closeDrawTool(); // no drawing while changing the picture
-      right.innerHTML = ''; // the form takes the picture's place until done
-
+      // A dialog in front of the book — the current picture stays visible.
+      const dlg = openTaskDialog('🖌️ Change this picture');
       const pic = buildPictureForm({
         initialPrompt: page.imagePrompt || '',
         getWords: () => (page.text || '').trim(),
         cancel: {
-          label: '↩️ Cancel — keep the old picture',
-          onCancel: () => { setStatus(''); render(); },
+          label: '✕ Cancel',
+          onCancel: () => { setStatus(''); dlg.close(); },
         },
         onSubmit: async (imagePrompt, ctl) => {
           ctl.setBusy(true);
@@ -2042,6 +2026,7 @@ function readerClientJs(): string {
             const data = await res.json().catch(() => ({}));
             if (res.ok && data.ok) {
               book = data.book;
+              dlg.close();
               setStatus("Here's the new picture! 🎉");
               render();
               return;
@@ -2055,10 +2040,351 @@ function readerClientJs(): string {
           }
         },
       });
-      right.appendChild(pic.form);
+      dlg.modal.appendChild(pic.form);
       pic.promptEl.focus();
     });
     return wrap;
+  }
+
+  // Background music (edit mode): controls live on the LEFT side of story
+  // pages and on the cover. Add/Change opens a modal DIALOG in front of the
+  // book (never stretching the page): an AI-suggested, editable prompt makes
+  // two instrumental takes; the child previews both and picks one, or
+  // regenerates, or cancels — the dialog closes on accept or cancel.
+  /** A floating dialog in front of the book (shared chrome for task flows). */
+  function openTaskDialog(titleText) {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'music-backdrop';
+    const modal = document.createElement('div');
+    modal.className = 'music-modal music-panel';
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+    const close = () => backdrop.remove();
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+    const h = document.createElement('h3');
+    h.textContent = titleText;
+    modal.appendChild(h);
+    return { modal: modal, close: close };
+  }
+
+  function musicTarget(kind, index) {
+    const base = '/v1/books/' + bookId;
+    if (kind === 'cover') {
+      return {
+        suggest: base + '/cover/suggest-music-prompt',
+        job: base + '/cover/music-job',
+        attach: base + '/cover/music',
+        remove: base + '/cover/music',
+        existing: function () { return book.coverMusic; },
+        what: 'the cover',
+      };
+    }
+    return {
+      suggest: base + '/pages/' + index + '/suggest-music-prompt',
+      job: base + '/pages/' + index + '/music-job',
+      attach: base + '/pages/' + index + '/music',
+      remove: base + '/pages/' + index + '/music',
+      existing: function () { return (book.pages[index] || {}).music; },
+      what: 'this page',
+    };
+  }
+
+  // Background-music jobs keep running after the dialog closes, so the child
+  // can keep editing the book meanwhile. Keyed by 'cover' or 'page:<index>'
+  // (the same target string the server stores on the job). While 'working'
+  // the page shows the composing line instead of its music buttons; once
+  // 'ready' it shows "Review background music" until a take is chosen or the
+  // job is discarded.
+  const bgMusicJobs = {};
+  function musicKey(kind, index) { return kind === 'cover' ? 'cover' : 'page:' + index; }
+
+  // Swap just that page's music controls when its job changes state — never
+  // re-render the whole spread under the child's feet.
+  function refreshMusicControls(key) {
+    const el = document.querySelector('[data-music-key="' + key + '"]');
+    if (!el || !el.replaceWith) return; // that page isn't on screen right now
+    if (key === 'cover') el.replaceWith(musicControls('cover', null));
+    else el.replaceWith(musicControls('page', Number(key.slice(5))));
+  }
+
+  // Poll a submitted job in the background until it settles.
+  function startMusicJobWatch(key, jobId) {
+    bgMusicJobs[key] = { jobId: jobId, state: 'working' };
+    const timer = setInterval(async () => {
+      try {
+        const jr = await fetch('/v1/books/' + bookId + '/music-job/' + jobId);
+        const jd = await jr.json().catch(() => ({}));
+        if (!jr.ok || !jd.ok) throw new Error('gone');
+        if (jd.state === 'working') return;
+        clearInterval(timer);
+        if (jd.state === 'done') {
+          bgMusicJobs[key] = { jobId: jobId, state: 'ready', candidates: jd.candidates || 0 };
+          setStatus('🎼 The music is ready! Press “Review background music” to hear it.');
+        } else {
+          delete bgMusicJobs[key];
+          setStatus(jd.message || 'The music maker had trouble — try again!', 'error');
+        }
+        refreshMusicControls(key);
+      } catch {
+        clearInterval(timer);
+        delete bgMusicJobs[key];
+        setStatus('Lost track of the music — please try again.', 'error');
+        refreshMusicControls(key);
+      }
+    }, 4000);
+  }
+
+  function musicControls(kind, index) {
+    const t = musicTarget(kind, index);
+    const key = musicKey(kind, index);
+    const wrap = document.createElement('div');
+    wrap.className = 'musicstack';
+    wrap.dataset.musicKey = key;
+    const job = bgMusicJobs[key];
+    if (job && job.state === 'working') {
+      // Composing continues quietly in the background: the music buttons make
+      // way for the status line until the takes are ready.
+      const line = document.createElement('div');
+      line.className = 'music-working';
+      line.innerHTML = '<span class="notes-anim">🎶</span><span>Composing… this takes a minute or two!</span>';
+      wrap.appendChild(line);
+      return wrap;
+    }
+    if (job && job.state === 'ready') {
+      const row = document.createElement('div');
+      row.className = 'readrow';
+      const review = document.createElement('button');
+      review.type = 'button';
+      review.className = 'readbtn music-btn';
+      review.textContent = '🎵 Review background music';
+      review.addEventListener('click', () => openMusicReviewDialog(t, key));
+      row.appendChild(review);
+      wrap.appendChild(row);
+      return wrap;
+    }
+    const has = !!t.existing();
+    const row1 = document.createElement('div');
+    row1.className = 'readrow';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'readbtn music-btn';
+    toggle.textContent = has ? '🎼 Change background music' : '🎼 Add background music';
+    toggle.addEventListener('click', () => {
+      // One song at a time per book: while another page's music is composing,
+      // say so here instead of opening a dialog that would only fail later
+      // (the status line is hidden behind a dialog in the foreground).
+      for (const k in bgMusicJobs) {
+        if (bgMusicJobs[k].state === 'working') {
+          setStatus('🎶 A song is already being made for this book — wait for it to finish!', 'blocked');
+          return;
+        }
+      }
+      openMusicDialog(t, key);
+    });
+    row1.appendChild(toggle);
+    wrap.appendChild(row1);
+    if (has) {
+      const row2 = document.createElement('div');
+      row2.className = 'readrow';
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'readbtn remove-music';
+      remove.textContent = '✕ Remove background music';
+      remove.addEventListener('click', async () => {
+        if (!confirm('Remove the background music from ' + t.what + '?')) return;
+        remove.disabled = true;
+        try {
+          const res = await fetch(t.remove, { method: 'DELETE' });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok) {
+            book = data.book;
+            setStatus('Background music removed. 🔇');
+            render();
+            return;
+          }
+          const f = friendlyError(res, data);
+          setStatus(f.text, f.cls);
+          remove.disabled = false;
+        } catch {
+          setStatus('Could not reach the server. Check your connection and try again.', 'error');
+          remove.disabled = false;
+        }
+      });
+      row2.appendChild(remove);
+      wrap.appendChild(row2);
+    }
+    return wrap;
+  }
+
+  function openMusicDialog(t, key) {
+    stopReading(); // no narration/music while composing new music
+    const dlg = openTaskDialog('🎼 Background music for ' + t.what);
+    const modal = dlg.modal;
+    const close = dlg.close;
+
+    const label = document.createElement('label');
+    label.textContent = 'What should the music feel like?';
+    modal.appendChild(label);
+    const ta = document.createElement('textarea');
+    ta.maxLength = 400;
+    modal.appendChild(ta);
+
+    const actions = document.createElement('div');
+    actions.className = 'music-actions';
+    const gen = document.createElement('button');
+    gen.type = 'button';
+    gen.className = 'cta';
+    gen.textContent = '🎵 Generate music';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'linkbtn';
+    cancel.textContent = '✕ Cancel';
+    cancel.addEventListener('click', () => { setStatus(''); close(); });
+    actions.appendChild(gen);
+    actions.appendChild(cancel);
+    modal.appendChild(actions);
+
+    // Prefill: the existing prompt when changing music; otherwise ask the AI
+    // for a prompt that fits the scene and mood (still fully editable).
+    const existing = t.existing();
+    if (existing && existing.prompt) {
+      ta.value = existing.prompt;
+      ta.focus();
+    } else {
+      ta.placeholder = '🎼 The music director is thinking…';
+      ta.disabled = true;
+      gen.disabled = true;
+      fetch(t.suggest, { method: 'POST' })
+        .then((res) => res.json().then((data) => ({ res, data })))
+        .then(({ res, data }) => {
+          if (res.ok && data.ok) ta.value = (data.result.musicPrompt || '').slice(0, 400);
+        })
+        .catch(() => {})
+        .finally(() => {
+          ta.disabled = false;
+          gen.disabled = false;
+          ta.placeholder = 'Gentle, hopeful music with soft piano and warm strings…';
+          ta.focus();
+        });
+    }
+
+    let jobInFlight = false; // belt-and-suspenders: the server refuses doubles too
+    gen.addEventListener('click', async () => {
+      if (jobInFlight) return;
+      const prompt = ta.value.trim();
+      if (!prompt) { setStatus('Tell me how the music should feel first! 🎼', 'blocked'); return; }
+      jobInFlight = true;
+      gen.disabled = true;
+      setStatus('');
+      try {
+        const res = await fetch(t.job, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ prompt: prompt }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          const f = friendlyError(res, data);
+          setStatus(f.text, f.cls);
+          gen.disabled = false;
+          jobInFlight = false;
+          return;
+        }
+        // The dialog's work is done: composing continues quietly in the
+        // background while the child keeps editing. The page's music buttons
+        // make way for the composing line until the takes are ready.
+        close();
+        startMusicJobWatch(key, data.jobId);
+        refreshMusicControls(key);
+        setStatus('🎶 Composing has begun! You can keep working on your book meanwhile.');
+      } catch {
+        setStatus('Could not reach the server. Check your connection and try again.', 'error');
+        gen.disabled = false;
+        jobInFlight = false;
+      }
+    });
+  }
+
+  // Review a finished job: hear both takes and pick one — or cancel to keep
+  // things exactly as they are. Either way the dialog closes and the page
+  // gets its normal music buttons back.
+  function openMusicReviewDialog(t, key) {
+    stopReading();
+    const job = bgMusicJobs[key];
+    if (!job) return;
+    const dlg = openTaskDialog('🎼 Background music for ' + t.what);
+    const modal = dlg.modal;
+    const close = dlg.close;
+
+    const label = document.createElement('label');
+    label.textContent = 'Pick the music you like best!';
+    modal.appendChild(label);
+
+    const candBox = document.createElement('div');
+    modal.appendChild(candBox);
+    for (let n = 1; n <= (job.candidates || 2); n++) {
+      const card = document.createElement('div');
+      card.className = 'music-cand';
+      const title = document.createElement('div');
+      title.className = 'mc-title';
+      title.textContent = '🎵 Music ' + n;
+      card.appendChild(title);
+      const audio = document.createElement('audio');
+      audio.controls = true;
+      audio.preload = 'none';
+      audio.src = '/v1/books/' + bookId + '/music-job/' + job.jobId + '/audio/' + n;
+      card.appendChild(audio);
+      const use = document.createElement('button');
+      use.type = 'button';
+      use.className = 'cta';
+      use.textContent = '✅ Use this one';
+      use.addEventListener('click', async () => {
+        modal.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+        try {
+          const res = await fetch(t.attach, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ jobId: job.jobId, choice: n }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok) {
+            book = data.book;
+            delete bgMusicJobs[key];
+            close();
+            setStatus('🎼 Background music added! It plays softly while the words are read aloud.');
+            render();
+            return;
+          }
+          const f = friendlyError(res, data);
+          setStatus(f.text, f.cls);
+          modal.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+        } catch {
+          setStatus('Could not reach the server. Check your connection and try again.', 'error');
+          modal.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+        }
+      });
+      card.appendChild(use);
+      candBox.appendChild(card);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'music-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'linkbtn';
+    cancel.textContent = '✕ Cancel — no new music';
+    cancel.addEventListener('click', async () => {
+      cancel.disabled = true;
+      // Let the server drop the unused takes right away; losing this call is
+      // harmless (the job times out on its own).
+      try { await fetch('/v1/books/' + bookId + '/music-job/' + job.jobId, { method: 'DELETE' }); } catch {}
+      delete bgMusicJobs[key];
+      close();
+      setStatus('Okay — no new music. 🎼');
+      refreshMusicControls(key);
+    });
+    actions.appendChild(cancel);
+    modal.appendChild(actions);
   }
 
   // Page tools (edit mode): move / insert after / copy / remove this page.
@@ -2136,7 +2462,7 @@ function readerClientJs(): string {
     wrap.className = 'regen';
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'cta';
+    btn.className = 'readbtn theend';
     btn.textContent = '✍️ Keep writing the story';
     wrap.appendChild(btn);
     btn.addEventListener('click', async () => {
@@ -2188,6 +2514,8 @@ function readerClientJs(): string {
     const storyEl = editor.ta;
     left.appendChild(editor.form);
     if (inserting) {
+      const cancelRow = document.createElement('div');
+      cancelRow.className = 'readrow';
       const cancelIns = document.createElement('button');
       cancelIns.type = 'button';
       cancelIns.className = 'linkbtn';
@@ -2199,7 +2527,8 @@ function readerClientJs(): string {
         setStatus('');
         render();
       });
-      left.appendChild(cancelIns);
+      cancelRow.appendChild(cancelIns);
+      left.appendChild(cancelRow);
     }
 
     // Right page: the shared picture form; Paint makes the page.
@@ -2442,6 +2771,16 @@ function readerClientJs(): string {
       }
       book = data.book;
       mine = !!data.mine;
+      // Music generation lives on the server: restore any job still composing
+      // (or waiting for review) so a reload doesn't lose the page's state.
+      try {
+        const mj = await fetch('/v1/books/' + bookId + '/music-jobs');
+        const md = await mj.json().catch(() => ({}));
+        for (const j of (mj.ok && md.ok && md.jobs) || []) {
+          if (j.state === 'done') bgMusicJobs[j.target] = { jobId: j.jobId, state: 'ready', candidates: j.candidates || 0 };
+          else startMusicJobWatch(j.target, j.jobId);
+        }
+      } catch {}
       // A book that was already finished when opened starts as a pure reader;
       // one still being written continues in creation (edit) mode.
       editMode = !finished();

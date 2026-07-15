@@ -325,6 +325,76 @@ export const godmotherProvider: Provider<GodmotherRequest> = {
   },
 };
 
+// --- Suggest a background-music prompt for a storybook page ---------------------
+
+export interface SuggestMusicRequest {
+  book: Book;
+  /** The page getting background music — omit for the book's COVER. */
+  pageIndex?: number;
+}
+
+const MUSIC_SUGGEST_SCHEMA = {
+  type: 'OBJECT',
+  properties: { musicPrompt: { type: 'STRING' } },
+  required: ['musicPrompt'],
+} as const;
+
+const MUSIC_DIRECTOR_PERSONA =
+  "You are the music director of a children's picture-book app (ages 5-12). Given one page " +
+  'of a story, write "musicPrompt": a short brief (1-2 sentences, under 220 characters) for ' +
+  'INSTRUMENTAL background music that fits the scene and its mood. Name the mood, a tempo ' +
+  'feel, and 2-4 instruments (e.g. "Gentle, hopeful lullaby at a slow rocking tempo — soft ' +
+  'piano, warm strings and a hint of glockenspiel"). Match how the moment FEELS (scary-ish ' +
+  'moments get gently mysterious music, never frightening). No vocals, no lyrics, gentle and ' +
+  'child-friendly.';
+
+export const suggestMusicPromptProvider: Provider<SuggestMusicRequest> = {
+  name: 'fairy dust',
+
+  isConfigured() {
+    return Boolean(config.providers.gemini.apiKey);
+  },
+
+  // No child-typed text: the inputs are already-moderated story content.
+  inputTexts() {
+    return [];
+  },
+
+  async generate(req): Promise<GenerationResult> {
+    const { apiKey, baseUrl } = config.providers.gemini;
+    if (!apiKey) throw new ProviderNotConfiguredError('fairy dust');
+    let target: string;
+    if (req.pageIndex === undefined) {
+      target =
+        "The music is for the book's FRONT COVER — an opening theme that captures the " +
+        'spirit and mood of the whole story.\n';
+    } else {
+      const page = req.book.pages[req.pageIndex];
+      target =
+        `The page getting background music is page ${req.pageIndex + 1}:\n` +
+        `Words: """${page?.text ?? ''}"""\n` +
+        (page?.imagePrompt ? `Picture: ${page.imagePrompt}\n` : '');
+    }
+
+    const user =
+      `Here is the story so far:\n\n${storyWithPictures(req.book)}\n\n` +
+      target +
+      '\nWrite the musicPrompt.';
+
+    const raw = await callGemini(apiKey, baseUrl, MUSIC_DIRECTOR_PERSONA, user, MUSIC_SUGGEST_SCHEMA);
+    const musicPrompt = pickString(raw, 'musicPrompt').slice(0, 300);
+    if (!musicPrompt) {
+      throw new ProviderRequestError('fairy dust', 502, 'no music idea came back');
+    }
+
+    return {
+      textToModerate: [musicPrompt],
+      metadataToModerate: [],
+      result: { musicPrompt },
+    };
+  },
+};
+
 // --- Shared Gemini plumbing ------------------------------------------------------
 
 async function callGemini(

@@ -164,6 +164,7 @@ function musicSharedJs(): string {
     }
     if (res.status === 401) return { text: 'Your session ended. <a href="/login">Sign in again</a>.', cls: 'error' };
     if (res.status === 400 && data && data.error) return { text: data.error, cls: 'blocked' };
+    if (res.status === 409 && data && data.error) return { text: data.error, cls: 'blocked' };
     if (res.status === 501) return { text: "The music maker isn't set up yet. Ask a grown-up to add the key.", cls: 'error' };
     if (res.status === 503) return { text: 'Lots of people are creating right now — please try again in a moment.', cls: 'error' };
     return { text: 'Something went wrong. Please try again.', cls: 'error' };
