@@ -203,6 +203,15 @@ export const config = {
       // enabling it doesn't flip the storybook narrator to ElevenLabs (that
       // engine choice keys the narration cache — see routes/books.ts).
       voicesApiKey: str('ELEVENLABS_VOICES_API_KEY') || str('ELEVENLABS_API_KEY'),
+      // Delivery tuning for cloned voices, all adjustable without code changes.
+      // Speed 1.0 = natural pace (slowing an IVC clone drags its artifacts).
+      // LOWER stability = livelier intonation; style adds expressive delivery;
+      // similarity anchors the kid's timbre.
+      voicesSpeed: Math.min(1.2, Math.max(0.7, Number(str('ELEVENLABS_VOICES_SPEED', '1.0')) || 1.0)),
+      voicesModel: str('ELEVENLABS_VOICES_MODEL', 'eleven_multilingual_v2'),
+      voicesStability: Math.min(1, Math.max(0, Number(str('ELEVENLABS_VOICES_STABILITY', '0.35')) || 0.35)),
+      voicesStyle: Math.min(1, Math.max(0, Number(str('ELEVENLABS_VOICES_STYLE', '0.45')) || 0.45)),
+      voicesSimilarity: Math.min(1, Math.max(0, Number(str('ELEVENLABS_VOICES_SIMILARITY', '0.75')) || 0.75)),
     },
     gemini: {
       apiKey: str('GEMINI_API_KEY'),
