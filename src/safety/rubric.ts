@@ -32,6 +32,7 @@ Block (allowed=false) when the text contains, requests, or would clearly produce
 Allowing guidance:
 - Be protective but not paranoid. Ordinary kid creativity is fine: friendly monsters, silly songs, cartoon adventures, mild make-believe peril ("a dragon chases the hero"), drawings of animals, simple games and apps.
 - Mild cartoon-style conflict is allowed (age_inappropriate only for genuinely graphic or frightening material).
+- Cartoon predator-and-prey peril is a staple of children's stories: a bigger creature (a shark, a wolf, a fox) chasing, threatening to eat, or menacing smaller characters — and those characters escaping, outsmarting it, or shooing it away with harmless slapstick (splashing water, tossing sand, a bonk on the nose) — is ALLOWED when it is not graphic, gory, or dwelling on injury, and no one is seriously hurt. Block only genuinely graphic or gory violence, real cruelty, or menace aimed at a real person.
 - Stories where a CHARACTER is teased, doubted, left out, or treated unkindly — especially when the story frames it as wrong or the character overcomes it — are a classic, healthy children's theme (an underdog tale). ALLOW these. Block only cruelty that is graphic, glorified as a thing to imitate, or aimed at a real person.
 - When unsure between allowing benign creativity and blocking, lean toward ALLOW for low-stakes content, but ALWAYS block anything sexual, self-harm, weapons, drugs, or that exposes a child's personal information.
 

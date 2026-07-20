@@ -197,8 +197,61 @@ pagesRouter.get('/', (_req: Request, res: Response) => {
         }
         .badge { position: absolute; top: 12px; right: 12px; font-size: 11px; font-weight: 700;
           color: #2c6e8f; background: #dcebf1; border-radius: 999px; padding: 3px 9px; }
+        /* Experimental-features opt-in (primary account only, once per login) */
+        .exp-backdrop { position: fixed; inset: 0; background: rgba(16,42,54,.55);
+          z-index: 80; display: flex; align-items: center; justify-content: center; padding: 20px; }
+        .exp-modal { background: #fff; border-radius: 14px; width: min(92vw, 420px);
+          padding: 22px 24px; box-shadow: 0 24px 60px rgba(0,0,0,.4); }
+        .exp-modal h3 { margin: 0 0 14px; font-size: 18px; color: #102a36; }
+        .exp-modal label { display: flex; align-items: center; gap: 10px; font-size: 15px;
+          color: #102a36; cursor: pointer; }
+        .exp-modal input { width: 18px; height: 18px; accent-color: #2c6e8f; cursor: pointer; }
+        .exp-modal .cta { margin-top: 18px; width: 100%; }
       </style>`,
-    }),
+    }) +
+      `<script>
+      // Primary-account opt-in: shown once per login session. Other accounts
+      // never see it (the server reports eligible:false for them).
+      (async () => {
+        try {
+          const res = await fetch('/v1/experimental');
+          const data = await res.json();
+          if (!res.ok || !data.ok || !data.eligible || data.prompted) return;
+          const backdrop = document.createElement('div');
+          backdrop.className = 'exp-backdrop';
+          const modal = document.createElement('div');
+          modal.className = 'exp-modal';
+          const h = document.createElement('h3');
+          h.textContent = 'Welcome back!';
+          const label = document.createElement('label');
+          const box = document.createElement('input');
+          box.type = 'checkbox';
+          box.checked = false;
+          label.appendChild(box);
+          label.appendChild(document.createTextNode('Allow experimental features'));
+          const go = document.createElement('button');
+          go.type = 'button';
+          go.className = 'cta';
+          go.textContent = 'Continue';
+          go.addEventListener('click', async () => {
+            go.disabled = true;
+            try {
+              await fetch('/v1/experimental', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ enabled: box.checked }),
+              });
+            } catch {}
+            backdrop.remove();
+          });
+          modal.appendChild(h);
+          modal.appendChild(label);
+          modal.appendChild(go);
+          backdrop.appendChild(modal);
+          document.body.appendChild(backdrop);
+        } catch {}
+      })();
+      </script>`,
   );
 });
 
@@ -800,6 +853,18 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .page input.revealed { animation: dustreveal 1s ease; }
         /* Background music (edit mode) */
         .readbtn.music-btn { background: #e6f2ec; border-color: #7ab89a; }
+        /* When a page's music finishes, its Review button glows gold to draw
+           the child back to it — especially after they've wandered to another
+           page while it composed. */
+        .readbtn.music-btn.music-review-shine {
+          border-color: #e6a817; color: #7a4e00;
+          animation: musicshine 1.4s ease-in-out infinite; }
+        @keyframes musicshine {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(230,168,23,0); background: #eef7f1; }
+          50% { box-shadow: 0 0 15px 4px rgba(230,168,23,.8); background: #fff2ce; } }
+        @media (prefers-reduced-motion: reduce) {
+          .readbtn.music-btn.music-review-shine { animation: none;
+            box-shadow: 0 0 12px 3px rgba(230,168,23,.75); background: #fff2ce; } }
         .musicstack { display: flex; flex-direction: column; }
         .musicstack .readrow { margin-top: 8px; }
         .readbtn.remove-music { background: #fbecec; border-color: #d9938e; color: #8a1c1c; }
@@ -823,14 +888,48 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         /* While composing, the line stands where the music buttons were —
            centered like every other row on the page. */
         .musicstack .music-working { justify-content: center; font-size: 13px; }
+        /* "Getting the voices ready" dialog: the count of pages recorded so far. */
+        .narr-progress { margin-top: 10px; text-align: center; font-size: 13px;
+          font-weight: 700; color: #6b5d43; }
         @keyframes bob { from { transform: translateY(2px) rotate(-8deg); } to { transform: translateY(-4px) rotate(8deg); } }
         .music-cand { border: 1px solid #e0d6bd; background: #fdf9f0; border-radius: 10px;
-          padding: 10px 12px; margin-top: 8px; }
+          padding: 10px 12px; margin-top: 8px; display: flex; flex-direction: column; }
         .music-cand .mc-title { font-weight: 800; font-size: 13px; color: #8a5a00; }
-        .music-cand audio { width: 100%; margin-top: 6px; }
-        .music-cand .cta { padding: 8px 12px; font-size: 13px; margin-top: 8px; }
+        /* Custom player: a bold blue play/pause button (white symbol, matching
+           the "Pick this song" button) so the control stands out and children
+           don't miss it. Native <audio> controls can't be recolored reliably. */
+        .mc-player { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+        .mc-play { flex: 0 0 auto; width: 42px; height: 42px; border: none; border-radius: 50%;
+          background: #2c6e8f; cursor: pointer; padding: 0; display: flex;
+          align-items: center; justify-content: center; }
+        .mc-play:hover { background: #245d79; }
+        .mc-play:disabled { background: #9bb6c2; cursor: progress; }
+        .mc-play .ic-play { width: 0; height: 0; border-style: solid;
+          border-width: 8px 0 8px 14px; border-color: transparent transparent transparent #fff;
+          margin-left: 3px; }
+        .mc-play .ic-pause { display: none; align-items: center; gap: 5px; }
+        .mc-play .ic-pause::before, .mc-play .ic-pause::after {
+          content: ''; width: 5px; height: 16px; background: #fff; border-radius: 1px; }
+        .mc-play.playing .ic-play { display: none; }
+        .mc-play.playing .ic-pause { display: flex; }
+        .mc-track { flex: 1; height: 7px; background: #e0d6bd; border-radius: 4px;
+          position: relative; cursor: pointer; }
+        .mc-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0;
+          background: #2c6e8f; border-radius: 4px; }
+        .mc-time { flex: 0 0 auto; min-width: 34px; text-align: right; font-size: 12px;
+          color: #6b5d43; font-variant-numeric: tabular-nums; }
+        /* "Pick this song" sits on the RIGHT, clear of the play button on the
+           left, so it's not fumbled while previewing a take. */
+        .music-cand .cta { align-self: flex-end; padding: 8px 12px; font-size: 13px; margin-top: 8px; }
         .music-actions { display: flex; gap: 12px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
         .music-actions .cta { padding: 9px 14px; font-size: 14px; }
+        /* Engine checkboxes in the compose dialog (A/B the music makers). */
+        .music-engines { display: flex; gap: 14px; flex-wrap: wrap; margin: 2px 0 4px;
+          font-size: 13.5px; color: #3d2f1e; }
+        .music-engine { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+          font-weight: 600; }
+        .music-engine input { width: 16px; height: 16px; accent-color: #2c6e8f; cursor: pointer; }
+        .music-engine:has(input:disabled) { opacity: .5; cursor: not-allowed; }
         /* Page tools (edit mode) */
         .pagetools { display: flex; flex-wrap: wrap; gap: 4px 10px; justify-content: center;
           margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e0d6bd; }
@@ -881,6 +980,10 @@ function readerClientJs(): string {
 
   let book = null;
   let mine = false; // signed-in account owns this book (server-computed)
+  // Experimental features (background music) for THIS login session. Off by
+  // default: no music buttons render and attached music stays silent, so the
+  // feature is invisible unless the session opted in at login.
+  let expFeatures = false;
   // Spread 0 = cover; spreads 1..N = story pages; spread N+1 = "add a page"
   // (the add spread disappears once the book has a "The End" page).
   let spread = 0;
@@ -1143,7 +1246,7 @@ function readerClientJs(): string {
       haltPlayback();
       btn.classList.add('reading');
       btn.textContent = '⏹ Stop reading';
-      const musicUrl = page.music
+      const musicUrl = expFeatures && page.music
         ? '/v1/books/' + bookId + '/pages/' + pageIndex + '/music-audio'
         : null;
       startBgMusic(musicUrl); // this page's background music (if any)
@@ -1210,8 +1313,8 @@ function readerClientJs(): string {
       // The cover's background music (if any) plays under the intro, starting
       // 1s before the vocals, and fades out before the first page turn — same
       // rules as story pages.
-      const musicStartedAt = book.coverMusic ? Date.now() : 0;
-      startBgMusic(book.coverMusic ? '/v1/books/' + bookId + '/cover/music-audio' : null);
+      const musicStartedAt = expFeatures && book.coverMusic ? Date.now() : 0;
+      startBgMusic(expFeatures && book.coverMusic ? '/v1/books/' + bookId + '/cover/music-audio' : null);
       const afterLeadIn = (cb) => {
         if (!musicStartedAt) { cb(); return; }
         const wait = Math.max(0, BG_LEAD_IN_MS - (Date.now() - musicStartedAt));
@@ -1615,7 +1718,7 @@ function readerClientJs(): string {
       right.appendChild(actionCluster([
         readAllControls(),
         editable() ? coverRegenControls() : null,
-        editable() ? musicControls('cover', null) : null,
+        expFeatures && editable() ? musicControls('cover', null) : null,
       ], 'cover-actions'));
     } else if (spread === 1) {
       renderTitlePage();
@@ -1650,7 +1753,7 @@ function readerClientJs(): string {
         readRow(spread - 2, p, t),
         editable() ? wordsEditControls(spread - 2, p, t) : null,
         // Background music, once the page has words and picture.
-        editable() && p.text && p.image ? musicControls('page', spread - 2) : null,
+        expFeatures && editable() && p.text && p.image ? musicControls('page', spread - 2) : null,
         editable() ? pageToolsControls(spread - 2) : null,
       ]));
       if (p.image) {
@@ -2118,8 +2221,10 @@ function readerClientJs(): string {
         if (jd.state === 'working') return;
         clearInterval(timer);
         if (jd.state === 'done') {
-          bgMusicJobs[key] = { jobId: jobId, state: 'ready', candidates: jd.candidates || 0 };
-          setStatus('🎼 The music is ready! Press “Review background music” to hear it.');
+          bgMusicJobs[key] = { jobId: jobId, state: 'ready', candidates: jd.candidates || 0, takes: jd.takes || [] };
+          const where = key === 'cover' ? 'the cover' : 'page ' + (Number(key.slice(5)) + 1);
+          setStatus('🎼 The music for ' + where + ' is ready! Look for the glowing “Review background music” button.'
+            + (jd.message ? ' (' + jd.message + ')' : ''));
         } else {
           delete bgMusicJobs[key];
           setStatus(jd.message || 'The music maker had trouble — try again!', 'error');
@@ -2155,7 +2260,10 @@ function readerClientJs(): string {
       row.className = 'readrow';
       const review = document.createElement('button');
       review.type = 'button';
-      review.className = 'readbtn music-btn';
+      // The shine pulls the child back to a page whose music finished while
+      // they were composing or reading elsewhere — it glows the moment this
+      // button is rendered, whether in place or when they navigate back to it.
+      review.className = 'readbtn music-btn music-review-shine';
       review.textContent = '🎵 Review background music';
       review.addEventListener('click', () => openMusicReviewDialog(t, key));
       row.appendChild(review);
@@ -2170,15 +2278,10 @@ function readerClientJs(): string {
     toggle.className = 'readbtn music-btn';
     toggle.textContent = has ? '🎼 Change background music' : '🎼 Add background music';
     toggle.addEventListener('click', () => {
-      // One song at a time per book: while another page's music is composing,
-      // say so here instead of opening a dialog that would only fail later
-      // (the status line is hidden behind a dialog in the foreground).
-      for (const k in bgMusicJobs) {
-        if (bgMusicJobs[k].state === 'working') {
-          setStatus('🎶 A song is already being made for this book — wait for it to finish!', 'blocked');
-          return;
-        }
-      }
+      // Each page (and the cover) composes on its own: a page that's already
+      // working shows the composing line instead of this button, so opening the
+      // dialog here is always for an idle target. Other pages may be composing
+      // meanwhile — that's fine, they don't block this one.
       openMusicDialog(t, key);
     });
     row1.appendChild(toggle);
@@ -2229,6 +2332,38 @@ function readerClientJs(): string {
     ta.maxLength = 400;
     modal.appendChild(ta);
 
+    // Which music makers to try (A/B): one checkbox per configured engine.
+    // All checked takes are composed side by side in ONE job, and the review
+    // opens only when every one of them has finished.
+    const engLabel = document.createElement('label');
+    engLabel.textContent = 'Which music makers should try?';
+    modal.appendChild(engLabel);
+    const engRow = document.createElement('div');
+    engRow.className = 'music-engines';
+    engRow.textContent = 'Looking for the music makers…';
+    modal.appendChild(engRow);
+    const engineBoxes = []; // { id, box }
+    fetch('/v1/books/music-engines')
+      .then((res) => res.json())
+      .then((data) => {
+        engRow.textContent = '';
+        for (const e of (data && data.engines) || []) {
+          const wrap = document.createElement('label');
+          wrap.className = 'music-engine';
+          const box = document.createElement('input');
+          box.type = 'checkbox';
+          box.checked = e.configured;
+          box.disabled = !e.configured;
+          wrap.appendChild(box);
+          wrap.appendChild(document.createTextNode(
+            ' 🎹 ' + e.label + (e.configured ? '' : ' (not set up)')));
+          engRow.appendChild(wrap);
+          if (e.configured) engineBoxes.push({ id: e.id, box: box });
+        }
+        if (!engineBoxes.length) engRow.textContent = 'No music makers are set up yet.';
+      })
+      .catch(() => { engRow.textContent = 'Could not load the music makers — try again!'; });
+
     const actions = document.createElement('div');
     actions.className = 'music-actions';
     const gen = document.createElement('button');
@@ -2273,6 +2408,8 @@ function readerClientJs(): string {
       if (jobInFlight) return;
       const prompt = ta.value.trim();
       if (!prompt) { setStatus('Tell me how the music should feel first! 🎼', 'blocked'); return; }
+      const engines = engineBoxes.filter((e) => e.box.checked).map((e) => e.id);
+      if (!engines.length) { setStatus('Pick at least one music maker! 🎹', 'blocked'); return; }
       jobInFlight = true;
       gen.disabled = true;
       setStatus('');
@@ -2280,7 +2417,7 @@ function readerClientJs(): string {
         const res = await fetch(t.job, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ prompt: prompt }),
+          body: JSON.stringify({ prompt: prompt, engines: engines }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) {
@@ -2327,17 +2464,74 @@ function readerClientJs(): string {
       card.className = 'music-cand';
       const title = document.createElement('div');
       title.className = 'mc-title';
-      title.textContent = '🎵 Music ' + n;
+      // Label each take with the engine that made it (and how long it took),
+      // so takes from different music makers can be compared fairly.
+      const take = (job.takes || [])[n - 1];
+      title.textContent = '🎵 Music ' + n
+        + (take ? ' — ' + take.label + ' (' + take.seconds + 's)' : '');
       card.appendChild(title);
+      // A custom player: native <audio controls> can't be recolored, so we
+      // drive a hidden audio element with a bold blue play/pause button (white
+      // symbol, like "Pick this song") plus a seek bar and elapsed time.
       const audio = document.createElement('audio');
-      audio.controls = true;
-      audio.preload = 'none';
+      audio.preload = 'metadata';
       audio.src = '/v1/books/' + bookId + '/music-job/' + job.jobId + '/audio/' + n;
+      const player = document.createElement('div');
+      player.className = 'mc-player';
+      const play = document.createElement('button');
+      play.type = 'button';
+      play.className = 'mc-play';
+      play.setAttribute('aria-label', 'Play music ' + n);
+      play.innerHTML = '<span class="ic-play"></span><span class="ic-pause"></span>';
+      const track = document.createElement('div');
+      track.className = 'mc-track';
+      const fill = document.createElement('div');
+      fill.className = 'mc-fill';
+      track.appendChild(fill);
+      const time = document.createElement('span');
+      time.className = 'mc-time';
+      time.textContent = '0:00';
+      player.appendChild(play);
+      player.appendChild(track);
+      player.appendChild(time);
+      card.appendChild(player);
       card.appendChild(audio);
+
+      const fmtTime = (s) => {
+        if (!isFinite(s) || s < 0) s = 0;
+        const mins = Math.floor(s / 60);
+        const secs = Math.floor(s % 60);
+        return mins + ':' + (secs < 10 ? '0' : '') + secs;
+      };
+      play.addEventListener('click', () => {
+        if (audio.paused) {
+          // Only one take plays at a time, so it's a fair side-by-side compare.
+          candBox.querySelectorAll('audio').forEach((a) => { if (a !== audio) a.pause(); });
+          audio.play().catch(() => {});
+        } else {
+          audio.pause();
+        }
+      });
+      audio.addEventListener('play', () => play.classList.add('playing'));
+      audio.addEventListener('pause', () => play.classList.remove('playing'));
+      audio.addEventListener('ended', () => { play.classList.remove('playing'); fill.style.width = '0%'; });
+      audio.addEventListener('timeupdate', () => {
+        const dur = audio.duration || 0;
+        fill.style.width = (dur ? (audio.currentTime / dur) * 100 : 0) + '%';
+        time.textContent = fmtTime(audio.currentTime);
+      });
+      track.addEventListener('click', (e) => {
+        const dur = audio.duration || 0;
+        if (!dur) return;
+        const rect = track.getBoundingClientRect();
+        const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+        audio.currentTime = ratio * dur;
+      });
+
       const use = document.createElement('button');
       use.type = 'button';
       use.className = 'cta';
-      use.textContent = '✅ Use this one';
+      use.textContent = '✅ Pick this song';
       use.addEventListener('click', async () => {
         modal.querySelectorAll('button').forEach((b) => { b.disabled = true; });
         try {
@@ -2759,6 +2953,84 @@ function readerClientJs(): string {
     if (e.key === 'ArrowRight' && spread < lastSpread()) { e.preventDefault(); spread++; setStatus(''); render(); }
   });
 
+  // Voices are recorded in the background after a book is written. If a reader
+  // opens the book before every page (and the cover intro) has its recording,
+  // greet them with a friendly "please wait" dialog that clears itself the
+  // moment the voices are ready — and hydrates the book so playback is instant.
+  function watchNarrationReadiness() {
+    let dlg = null;      // the wait dialog, once shown
+    let progress = null; // the "3 of 8 pages ready" line inside it
+    let dismissed = false; // child chose to wait quietly — don't pop it back up
+    let kicked = false;    // asked the server to start recording (once)
+    let waited = false;    // narration was ever incomplete on this open
+
+    function showDialog() {
+      dlg = openTaskDialog('🎙️ Getting the voices ready');
+      const line = document.createElement('div');
+      line.className = 'music-working';
+      line.innerHTML = '<span class="notes-anim">🎙️</span>'
+        + '<span>We’re still recording the voices for this book. '
+        + 'Please wait a little — this can take a minute!</span>';
+      dlg.modal.appendChild(line);
+      progress = document.createElement('div');
+      progress.className = 'narr-progress';
+      dlg.modal.appendChild(progress);
+      const actions = document.createElement('div');
+      actions.className = 'music-actions';
+      const peek = document.createElement('button');
+      peek.type = 'button';
+      peek.className = 'linkbtn';
+      peek.textContent = '👀 Look at the pictures while I wait';
+      // Closing just hides the dialog; the watcher keeps polling and will let
+      // the child know (via the status line) once the voices are ready.
+      peek.addEventListener('click', () => { dismissed = true; dlg.close(); dlg = null; progress = null; });
+      actions.appendChild(peek);
+      dlg.modal.appendChild(actions);
+    }
+
+    async function hydrate() {
+      // Reload the book so the fresh recordings are cached for instant "Read to
+      // me"; keep the reader on the same spread it was showing.
+      try {
+        const r = await fetch('/v1/books/' + bookId);
+        const d = await r.json().catch(() => ({}));
+        if (r.ok && d.ok) { book = d.book; render(); }
+      } catch {}
+    }
+
+    async function poll() {
+      let st;
+      try {
+        const r = await fetch('/v1/books/' + bookId + '/narration-status');
+        st = await r.json().catch(() => ({}));
+        if (!r.ok || !st.ok) return true; // can't tell — don't nag the child
+      } catch { return true; }
+      if (st.ready) {
+        if (dlg) { dlg.close(); dlg = null; progress = null; }
+        // Only announce (and reload for instant playback) if the child actually
+        // had to wait — a book that was ready all along stays quiet.
+        if (waited) { await hydrate(); setStatus('🎙️ The voices are ready — press “Read to me” to listen!'); }
+        return true;
+      }
+      waited = true;
+      // Nudge the server to record any missing pieces so this wait actually ends.
+      if (!kicked) {
+        kicked = true;
+        try { fetch('/v1/books/' + bookId + '/warm-narration', { method: 'POST' }); } catch {}
+      }
+      if (!dlg && !dismissed) showDialog();
+      if (progress) {
+        progress.textContent = st.total ? '🎧 ' + (st.done || 0) + ' of ' + st.total + ' pages ready…' : '';
+      }
+      return false;
+    }
+
+    (async () => {
+      if (await poll()) return;
+      const timer = setInterval(async () => { if (await poll()) clearInterval(timer); }, 4000);
+    })();
+  }
+
   (async () => {
     try {
       const res = await fetch('/v1/books/' + bookId);
@@ -2771,13 +3043,22 @@ function readerClientJs(): string {
       }
       book = data.book;
       mine = !!data.mine;
+      // Did this login session opt into experimental features? Decides whether
+      // any music UI renders or attached music plays — resolve before render.
+      try {
+        const er = await fetch('/v1/experimental');
+        const ed = await er.json().catch(() => ({}));
+        expFeatures = !!(er.ok && ed.ok && ed.enabled);
+      } catch {}
       // Music generation lives on the server: restore any job still composing
       // (or waiting for review) so a reload doesn't lose the page's state.
-      try {
+      // (Experimental sessions only — for everyone else the endpoint 404s and
+      // there is no music UI to restore.)
+      if (expFeatures) try {
         const mj = await fetch('/v1/books/' + bookId + '/music-jobs');
         const md = await mj.json().catch(() => ({}));
         for (const j of (mj.ok && md.ok && md.jobs) || []) {
-          if (j.state === 'done') bgMusicJobs[j.target] = { jobId: j.jobId, state: 'ready', candidates: j.candidates || 0 };
+          if (j.state === 'done') bgMusicJobs[j.target] = { jobId: j.jobId, state: 'ready', candidates: j.candidates || 0, takes: j.takes || [] };
           else startMusicJobWatch(j.target, j.jobId);
         }
       } catch {}
@@ -2786,6 +3067,10 @@ function readerClientJs(): string {
       editMode = !finished();
       renderActions();
       render();
+      // A finished book opens to read: make sure every voice is recorded first,
+      // and if not, ask the reader to wait. Drafts still being written warm
+      // their voices page-by-page, so they don't get nagged.
+      if (!editMode) watchNarrationReadiness();
     } catch {
       setStatus('Could not load your book. Check your connection and try again.', 'error');
     }

@@ -49,6 +49,8 @@ export interface PageMusic {
   /** The (moderated) prompt that produced it — prefilled when changing it. */
   prompt: string;
   mimeType: string;
+  /** Which music engine made the chosen take (for A/B comparison). */
+  engine?: string;
 }
 
 export interface BookNarration {

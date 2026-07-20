@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { Router, type Request, type Response } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { currentUser } from '../middleware/requireAuth.js';
+import { currentUser, experimentalEnabled } from '../middleware/requireAuth.js';
 import { imageProviderFor } from '../providers/imageProvider.js';
 import type { ImageEngine } from '../providers/types.js';
 import { runGuardedGeneration } from '../safety/guardedGeneration.js';
@@ -52,6 +52,8 @@ import {
   pollMusicTask,
   submitMusicTask,
 } from '../providers/aiMusic.js';
+import { generateMubertTrack, mubertConfigured } from '../providers/mubert.js';
+import { aceStepConfigured, generateAceStepTrack } from '../providers/aceStep.js';
 import { optionalString, requireString, ValidationError } from './validate.js';
 
 /**
@@ -333,6 +335,43 @@ booksApiRouter.post(
 );
 
 // --- Read a whole book (pages + images) ---------------------------------------
+// Storybook background music is an EXPERIMENTAL feature: hidden unless this
+// login session opted in (primary account's login dialog). These endpoints
+// 404 for everyone else so the feature's existence isn't revealed — matching
+// the client, which doesn't render any music UI without the opt-in.
+function requireExperimental(req: Request, res: Response, next: () => void): void {
+  if (!experimentalEnabled(req)) {
+    res.status(404).json({ ok: false, error: 'Not found' });
+    return;
+  }
+  next();
+}
+for (const path of [
+  '/music-engines',
+  '/:id/pages/:index/suggest-music-prompt',
+  '/:id/pages/:index/music-job',
+  '/:id/pages/:index/music',
+  '/:id/cover/suggest-music-prompt',
+  '/:id/cover/music-job',
+  '/:id/cover/music',
+]) {
+  booksApiRouter.use(path, requireExperimental);
+}
+
+// Which music engines the compose dialog can offer (registered before /:id so
+// "music-engines" is never mistaken for a book id). Checked engines run side
+// by side in one job for A/B comparison.
+booksApiRouter.get('/music-engines', (_req: Request, res: Response) => {
+  res.json({
+    ok: true,
+    engines: Object.entries(MUSIC_ENGINES).map(([id, e]) => ({
+      id,
+      label: e.label,
+      configured: e.configured(),
+    })),
+  });
+});
+
 booksApiRouter.get(
   '/:id',
   asyncHandler(async (req, res) => {
@@ -539,6 +578,13 @@ function validNarration(page: BookPage) {
   return page.narration && page.narration.key === narrationKey() ? page.narration : undefined;
 }
 
+/** True when some read-aloud engine is available server-side (else the reader
+ * falls back to the browser's own speech synthesis, so there's nothing to
+ * pre-generate or wait for). */
+function narrationConfigured(): boolean {
+  return elevenLabsProvider.isConfigured() || geminiTtsProvider.isConfigured();
+}
+
 /**
  * Synthesize narration for one page's words through the guarded pipeline.
  * Engine: ElevenLabs when its key is set, else Gemini TTS on the AI Studio
@@ -574,8 +620,8 @@ async function synthesizeNarration(text: string) {
  * changed. Saves only if the words are still the same when the audio is ready
  * (a fast follow-up edit wins), and never breaks the request that spawned it.
  */
-function warmNarration(bookId: string, pageIndex: number, text: string): void {
-  void (async () => {
+function warmNarration(bookId: string, pageIndex: number, text: string): Promise<void> {
+  return (async () => {
     try {
       const { narration } = await synthesizeNarration(text);
       if (!narration) return; // engine unconfigured / blocked — nothing to warm
@@ -604,8 +650,8 @@ function introText(book: Book): string {
 }
 
 /** Pre-generate the cover-intro narration (same guarantees as warmNarration). */
-function warmIntroNarration(bookId: string): void {
-  void (async () => {
+function warmIntroNarration(bookId: string): Promise<void> {
+  return (async () => {
     try {
       const book = await getBook(bookId);
       if (!book) return;
@@ -692,6 +738,75 @@ booksApiRouter.post(
     }
     await updatePage(bookId, index, { narration });
     res.json({ ok: true, narration, pageIndex: index });
+  }),
+);
+
+// Lightweight readiness check for a book's read-aloud voices — no audio blobs,
+// just counts — so the reader can poll cheaply while narration warms in the
+// background and tell the child when the whole book is ready to be read.
+booksApiRouter.get(
+  '/:id/narration-status',
+  asyncHandler(async (req, res) => {
+    const book = await getBook(req.params.id ?? '');
+    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    let total = 0;
+    let done = 0;
+    for (const page of book.pages) {
+      if (!page.text) continue; // nothing to read aloud on this page
+      total += 1;
+      if (validNarration(page)) done += 1;
+    }
+    // The cover intro (title + authors) is always spoken, so it counts too.
+    const introReady = !!(book.introNarration && book.introNarration.key === narrationKey());
+    total += 1;
+    if (introReady) done += 1;
+    // With no engine configured there's nothing to generate or wait for — the
+    // reader uses the browser's own voice — so report ready to skip the dialog.
+    const configured = narrationConfigured();
+    res.json({ ok: true, ready: !configured || done >= total, configured, total, done, introReady });
+  }),
+);
+
+// Kick off background narration for every page (and the cover intro) that
+// isn't recorded yet, so the "please wait" dialog the reader shows has
+// something to actually wait on. Returns immediately; the reader polls
+// narration-status to learn when the voices are ready.
+booksApiRouter.post(
+  '/:id/warm-narration',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const book = await getBook(bookId);
+    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (!narrationConfigured()) {
+      res.json({ ok: true, configured: false });
+      return;
+    }
+    // Generate sequentially in the background so we don't hammer the TTS engine
+    // with a whole book's pages at once. Each warm() is a no-op if that piece
+    // is already recorded (e.g. a second reader opened the same book).
+    const pending: Array<() => Promise<void>> = [];
+    book.pages.forEach((page, index) => {
+      if (page.text && !validNarration(page)) pending.push(() => warmNarration(bookId, index, page.text));
+    });
+    if (!(book.introNarration && book.introNarration.key === narrationKey())) {
+      pending.push(() => warmIntroNarration(bookId));
+    }
+    void (async () => {
+      for (const run of pending) {
+        try {
+          await run();
+        } catch {
+          /* warm() already swallows its own errors; keep going */
+        }
+      }
+    })();
+    res.status(202).json({ ok: true, configured: true, warming: pending.length });
   }),
 );
 
@@ -845,6 +960,17 @@ booksApiRouter.post(
 // chooses is written to disk and attached to the page (page.music). Audio only
 // — no model text ever faces the child, so there is nothing to output-moderate.
 
+/**
+ * The music engines a job can run, for A/B comparison. The child picks which
+ * ones to try (checkboxes in the compose dialog); the job finishes only when
+ * EVERY selected engine has settled, so the takes are reviewed side by side.
+ */
+const MUSIC_ENGINES: Record<string, { label: string; configured: () => boolean }> = {
+  aimusic: { label: 'AIMusic', configured: aiMusicConfigured },
+  mubert: { label: 'Mubert', configured: mubertConfigured },
+  acestep: { label: 'ACE-Step', configured: aceStepConfigured },
+};
+
 interface BookMusicJob {
   id: string;
   owner: string | undefined;
@@ -854,8 +980,20 @@ interface BookMusicJob {
   prompt: string;
   state: 'working' | 'done' | 'failed';
   message?: string;
-  candidates: Array<{ mimeType: string; bytes: Buffer }>;
+  candidates: Array<{ mimeType: string; bytes: Buffer; engine: string; seconds: number }>;
+  /** Engines still composing; the job settles when this empties. */
+  pendingEngines: Set<string>;
+  failedEngines: string[];
   createdAt: number;
+}
+
+/** What the client needs to label each take in the review dialog. */
+function takesInfo(job: BookMusicJob): Array<{ engine: string; label: string; seconds: number }> {
+  return job.candidates.map((c) => ({
+    engine: c.engine,
+    label: MUSIC_ENGINES[c.engine]?.label ?? c.engine,
+    seconds: c.seconds,
+  }));
 }
 
 const musicJobs = new Map<string, BookMusicJob>();
@@ -870,47 +1008,131 @@ function pruneMusicJobs(): void {
   }
 }
 
-function runBookMusicJob(job: BookMusicJob, taskId: string): void {
+/** One engine finished (or failed): settle the job once ALL engines have. */
+function settleEngine(job: BookMusicJob, engine: string, ok: boolean): void {
+  job.pendingEngines.delete(engine);
+  if (!ok) job.failedEngines.push(engine);
+  if (job.pendingEngines.size > 0) return; // wait for the rest before review
+  if (job.candidates.length) {
+    job.state = 'done';
+    if (job.failedEngines.length) {
+      const names = job.failedEngines.map((e) => MUSIC_ENGINES[e]?.label ?? e).join(', ');
+      job.message = `${names} had trouble — but the other music is ready!`;
+    }
+  } else {
+    job.state = 'failed';
+    job.message = 'The music maker had trouble — please try again!';
+  }
+}
+
+/** AIMusicAPI (Suno-style songs): submit, poll until settled, keep 2 takes. */
+function runAiMusicEngine(job: BookMusicJob, description: string): void {
   void (async () => {
-    const deadline = Date.now() + MUSIC_POLL_TIMEOUT_MS;
+    const startedAt = Date.now();
+    const deadline = startedAt + MUSIC_POLL_TIMEOUT_MS;
     try {
+      const taskId = await submitMusicTask(description, true);
       for (;;) {
         if (Date.now() > deadline) {
-          job.state = 'failed';
-          job.message = 'The music took too long — please try again!';
+          logger.warn('aimusic engine timed out', { jobId: job.id });
+          settleEngine(job, 'aimusic', false);
           return;
         }
         await new Promise((r) => setTimeout(r, MUSIC_POLL_MS));
         const status = await pollMusicTask(taskId);
         if (status.state === 'working') continue;
         if (status.state === 'failed') {
-          job.state = 'failed';
-          job.message = 'The music maker had trouble — please try again!';
-          logger.warn('book music generation failed upstream', { taskId, error: status.error });
+          logger.warn('aimusic engine failed upstream', { taskId, error: status.error });
+          settleEngine(job, 'aimusic', false);
           return;
         }
+        const seconds = Math.round((Date.now() - startedAt) / 1000);
         for (const clip of status.clips.slice(0, 2)) {
           const audio = await downloadAudio(clip.audioUrl);
-          job.candidates.push({ mimeType: audio.mimeType, bytes: audio.bytes });
+          job.candidates.push({ mimeType: audio.mimeType, bytes: audio.bytes, engine: 'aimusic', seconds });
         }
-        if (!job.candidates.length) {
-          job.state = 'failed';
-          job.message = 'No music came back — please try again!';
-          return;
-        }
-        job.state = 'done';
-        logger.info('book music generated', { taskId, candidates: job.candidates.length });
+        logger.info('aimusic engine done', { taskId, seconds });
+        settleEngine(job, 'aimusic', true);
         return;
       }
     } catch (err) {
-      job.state = 'failed';
-      job.message = 'The music maker had trouble — please try again!';
-      logger.error('book music job error', {
-        taskId,
+      logger.error('aimusic engine error', {
+        jobId: job.id,
         error: err instanceof Error ? err.message : String(err),
       });
+      settleEngine(job, 'aimusic', false);
     }
   })();
+}
+
+/** Mubert (fast instrumental loops): one take, usually ready in seconds. */
+function runMubertEngine(job: BookMusicJob, description: string): void {
+  void (async () => {
+    const startedAt = Date.now();
+    try {
+      const audio = await generateMubertTrack(description, startedAt + MUSIC_POLL_TIMEOUT_MS);
+      const seconds = Math.round((Date.now() - startedAt) / 1000);
+      job.candidates.push({ mimeType: audio.mimeType, bytes: audio.bytes, engine: 'mubert', seconds });
+      logger.info('mubert engine done', { jobId: job.id, seconds });
+      settleEngine(job, 'mubert', true);
+    } catch (err) {
+      logger.error('mubert engine error', {
+        jobId: job.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      settleEngine(job, 'mubert', false);
+    }
+  })();
+}
+
+/** ACE-Step 1.5 on our Vertex endpoint: seconds when warm, ~minutes when the
+ * GPU has to wake from scale-to-zero (the adapter rides out the 429s). */
+function runAceStepEngine(job: BookMusicJob, description: string): void {
+  void (async () => {
+    const startedAt = Date.now();
+    try {
+      const audio = await generateAceStepTrack(description, startedAt + MUSIC_POLL_TIMEOUT_MS);
+      const seconds = Math.round((Date.now() - startedAt) / 1000);
+      job.candidates.push({ mimeType: audio.mimeType, bytes: audio.bytes, engine: 'acestep', seconds });
+      logger.info('acestep engine done', { jobId: job.id, seconds });
+      settleEngine(job, 'acestep', true);
+    } catch (err) {
+      logger.error('acestep engine error', {
+        jobId: job.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      settleEngine(job, 'acestep', false);
+    }
+  })();
+}
+
+/** Start every selected engine; the job settles when the last one finishes. */
+function runBookMusicJob(job: BookMusicJob, description: string): void {
+  for (const engine of [...job.pendingEngines]) {
+    if (engine === 'aimusic') runAiMusicEngine(job, description);
+    else if (engine === 'mubert') runMubertEngine(job, description);
+    else if (engine === 'acestep') runAceStepEngine(job, description);
+    else settleEngine(job, engine, false); // unknown engine — never wait on it
+  }
+}
+
+/**
+ * Parse and validate the engines requested for a music job. Defaults to
+ * aimusic (the original engine) when the client doesn't say; rejects engines
+ * that are unknown or not configured so the child never waits on a ghost.
+ */
+function requestedEngines(body: unknown): string[] {
+  const raw = (body as { engines?: unknown }).engines;
+  const list =
+    Array.isArray(raw) && raw.length ? raw.filter((e): e is string => typeof e === 'string') : ['aimusic'];
+  const engines = [...new Set(list)];
+  for (const engine of engines) {
+    if (!MUSIC_ENGINES[engine]) throw new ValidationError(`Unknown music engine: ${engine}`);
+    if (!MUSIC_ENGINES[engine].configured()) {
+      throw new ValidationError(`${MUSIC_ENGINES[engine].label} is not set up yet`);
+    }
+  }
+  return engines;
 }
 
 // AI-suggest a music prompt fitting the page's scene and mood (editable).
@@ -934,7 +1156,7 @@ booksApiRouter.post(
   }),
 );
 
-// Kick off generation (moderated prompt -> AIMusicAPI, always instrumental).
+// Kick off generation (moderated prompt -> the selected engines, instrumental).
 booksApiRouter.post(
   '/:id/pages/:index/music-job',
   asyncHandler(async (req, res) => {
@@ -942,10 +1164,11 @@ booksApiRouter.post(
     const index = Number.parseInt(req.params.index ?? '', 10);
     const prompt = requireString(req.body, 'prompt', { maxLength: 400 }).trim();
 
-    if (!aiMusicConfigured()) {
+    if (!Object.values(MUSIC_ENGINES).some((e) => e.configured())) {
       res.status(501).json({ ok: false, error: 'The music maker is not configured yet' });
       return;
     }
+    const engines = requestedEngines(req.body);
     const book = await getOwnedBook(bookId, currentUser(req));
     const page = Number.isInteger(index) && index >= 0 ? book?.pages[index] : undefined;
     if (!book || !page) {
@@ -971,11 +1194,18 @@ booksApiRouter.post(
       return;
     }
 
-    // One generation at a time per book: pressing the button twice (or on two
-    // devices) must never queue a second paid job while one is running.
+    // One generation at a time PER PAGE: pressing the button twice (or on two
+    // devices) must never queue a second paid job for the same page. Different
+    // pages (and the cover) may compose at once, so the guard is scoped to this
+    // page's target rather than the whole book.
     for (const other of musicJobs.values()) {
-      if (other.owner === currentUser(req) && other.bookId === bookId && other.state === 'working') {
-        res.status(409).json({ ok: false, error: 'A song is already being made for this book — wait for it to finish!' });
+      if (
+        other.owner === currentUser(req) &&
+        other.bookId === bookId &&
+        other.target === `page:${index}` &&
+        other.state === 'working'
+      ) {
+        res.status(409).json({ ok: false, error: 'A song is already being made for this page — wait for it to finish!' });
         return;
       }
     }
@@ -984,7 +1214,6 @@ booksApiRouter.post(
     const description =
       `${CHILD_SAFE_MUSIC_PREAMBLE} Instrumental background music (no vocals) for a ` +
       `storybook page. ${prompt}`;
-    const taskId = await submitMusicTask(description, true);
     const job: BookMusicJob = {
       id: randomUUID(),
       owner: currentUser(req),
@@ -993,10 +1222,12 @@ booksApiRouter.post(
       prompt,
       state: 'working',
       candidates: [],
+      pendingEngines: new Set(engines),
+      failedEngines: [],
       createdAt: Date.now(),
     };
     musicJobs.set(job.id, job);
-    runBookMusicJob(job, taskId);
+    runBookMusicJob(job, description);
     res.status(202).json({ ok: true, jobId: job.id });
   }),
 );
@@ -1019,7 +1250,7 @@ booksApiRouter.get('/:id/music-job/:jobId', (req: Request, res: Response) => {
     ok: true,
     state: job.state,
     ...(job.message ? { message: job.message } : {}),
-    ...(job.state === 'done' ? { candidates: job.candidates.length } : {}),
+    ...(job.state === 'done' ? { candidates: job.candidates.length, takes: takesInfo(job) } : {}),
   });
 });
 
@@ -1035,7 +1266,7 @@ booksApiRouter.get('/:id/music-jobs', (req: Request, res: Response) => {
       jobId: job.id,
       target: job.target,
       state: job.state,
-      ...(job.state === 'done' ? { candidates: job.candidates.length } : {}),
+      ...(job.state === 'done' ? { candidates: job.candidates.length, takes: takesInfo(job) } : {}),
     });
   }
   res.json({ ok: true, jobs });
@@ -1096,7 +1327,7 @@ booksApiRouter.post(
 
     const musicId = await savePageMusicAudio(candidate.bytes);
     const updated = await updatePage(bookId, index, {
-      music: { id: musicId, prompt: job!.prompt, mimeType: candidate.mimeType },
+      music: { id: musicId, prompt: job!.prompt, mimeType: candidate.mimeType, engine: candidate.engine },
     });
     if (!updated) {
       res.status(404).json({ ok: false, error: 'Page not found' });
@@ -1177,10 +1408,11 @@ booksApiRouter.post(
   asyncHandler(async (req, res) => {
     const bookId = req.params.id ?? '';
     const prompt = requireString(req.body, 'prompt', { maxLength: 400 }).trim();
-    if (!aiMusicConfigured()) {
+    if (!Object.values(MUSIC_ENGINES).some((e) => e.configured())) {
       res.status(501).json({ ok: false, error: 'The music maker is not configured yet' });
       return;
     }
+    const engines = requestedEngines(req.body);
     const book = await getOwnedBook(bookId, currentUser(req));
     if (!book) {
       res.status(404).json({ ok: false, error: 'Book not found' });
@@ -1200,11 +1432,17 @@ booksApiRouter.post(
       return;
     }
 
-    // One generation at a time per book: pressing the button twice (or on two
-    // devices) must never queue a second paid job while one is running.
+    // One generation at a time for the cover: pressing the button twice (or on
+    // two devices) must never queue a second paid job for the cover. Pages may
+    // compose at the same time, so the guard is scoped to the cover target.
     for (const other of musicJobs.values()) {
-      if (other.owner === currentUser(req) && other.bookId === bookId && other.state === 'working') {
-        res.status(409).json({ ok: false, error: 'A song is already being made for this book — wait for it to finish!' });
+      if (
+        other.owner === currentUser(req) &&
+        other.bookId === bookId &&
+        other.target === 'cover' &&
+        other.state === 'working'
+      ) {
+        res.status(409).json({ ok: false, error: 'A song is already being made for the cover — wait for it to finish!' });
         return;
       }
     }
@@ -1213,7 +1451,6 @@ booksApiRouter.post(
     const description =
       `${CHILD_SAFE_MUSIC_PREAMBLE} Instrumental background music (no vocals) for a ` +
       `storybook page. ${prompt}`;
-    const taskId = await submitMusicTask(description, true);
     const job: BookMusicJob = {
       id: randomUUID(),
       owner: currentUser(req),
@@ -1222,10 +1459,12 @@ booksApiRouter.post(
       prompt,
       state: 'working',
       candidates: [],
+      pendingEngines: new Set(engines),
+      failedEngines: [],
       createdAt: Date.now(),
     };
     musicJobs.set(job.id, job);
-    runBookMusicJob(job, taskId);
+    runBookMusicJob(job, description);
     res.status(202).json({ ok: true, jobId: job.id });
   }),
 );
@@ -1259,6 +1498,7 @@ booksApiRouter.post(
       id: musicId,
       prompt: job!.prompt,
       mimeType: candidate.mimeType,
+      engine: candidate.engine,
     });
     musicJobs.delete(jobId);
     res.json({ ok: true, book: updated });

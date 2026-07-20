@@ -14,6 +14,14 @@ interface SessionRecord {
   username: string;
   role: SessionRole;
   expiresAt: number;
+  /**
+   * Experimental features (storybook background music) switched on for THIS
+   * login session. Off by default for everyone; only the primary account is
+   * ever offered the opt-in dialog. Resets on every new login.
+   */
+  expFeatures: boolean;
+  /** The opt-in dialog has been answered this session (don't re-show it). */
+  expPrompted: boolean;
 }
 
 const sessions = new Map<string, SessionRecord>();
@@ -24,8 +32,22 @@ export function createSession(
   ttlMs: number = config.auth.sessionTtlMs,
 ): string {
   const token = randomBytes(32).toString('hex');
-  sessions.set(token, { username, role, expiresAt: Date.now() + ttlMs });
+  sessions.set(token, {
+    username,
+    role,
+    expiresAt: Date.now() + ttlMs,
+    expFeatures: false,
+    expPrompted: false,
+  });
   return token;
+}
+
+/** Record the experimental-features choice for this session. */
+export function setSessionExperimental(token: string | undefined, enabled: boolean): void {
+  const record = getSession(token);
+  if (!record) return;
+  record.expFeatures = enabled;
+  record.expPrompted = true;
 }
 
 export function getSession(token: string | undefined): SessionRecord | undefined {

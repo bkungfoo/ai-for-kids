@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { requireApiAuth } from '../middleware/requireAuth.js';
+import { experimentalState, requireApiAuth, setExperimental } from '../middleware/requireAuth.js';
 import { claudeCodeProvider } from '../providers/claudeCode.js';
 import { elevenLabsProvider } from '../providers/elevenlabs.js';
 import { geminiProvider } from '../providers/gemini.js';
@@ -40,6 +40,19 @@ router.get('/health', (_req: Request, res: Response) => {
 
 // All /v1 generation endpoints require a signed-in session.
 router.use('/v1', requireApiAuth);
+
+// --- Experimental features (session-scoped) ----------------------------------
+// The landing page asks the PRIMARY account whether to enable experimental
+// features (storybook background music) for this login; everyone else is
+// always off and never sees the dialog. GET feeds the client bootstrap.
+router.get('/v1/experimental', (req: Request, res: Response) => {
+  res.json({ ok: true, ...experimentalState(req) });
+});
+router.post('/v1/experimental', (req: Request, res: Response) => {
+  const enabled = (req.body as { enabled?: unknown } | undefined)?.enabled === true;
+  setExperimental(req, enabled);
+  res.json({ ok: true, ...experimentalState(req) });
+});
 
 // --- Storybooks: create books, add illustrated pages -------------------------
 router.use('/v1/books', booksApiRouter);

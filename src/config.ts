@@ -165,6 +165,34 @@ export const config = {
       // Model: chirp-v3-5 (5 credits) … chirp-v5 (12 credits).
       model: str('AIMUSIC_MODEL', 'chirp-v4-5'),
     },
+    // Mubert B2B API — fast royalty-free instrumental loops, A/B-tested against
+    // AIMusicAPI for storybook background music. Needs the account email plus
+    // the license and token from the Mubert B2B dashboard.
+    mubert: {
+      email: str('MUBERT_EMAIL'),
+      license: str('MUBERT_LICENSE'),
+      token: str('MUBERT_TOKEN'),
+      baseUrl: str('MUBERT_BASE_URL', 'https://api-b2b.mubert.com'),
+      // Loop length in seconds (storybook music loops under the narration).
+      durationSec: int('MUBERT_DURATION_SEC', 30),
+    },
+    // ACE-Step 1.5 (Apache-2.0) on our own Vertex AI prediction endpoint —
+    // A100 custom container with scale-to-zero (15 min idle). See
+    // deploy/acestep-vertex/ for the container and deploy script.
+    aceStep: {
+      // Scale-to-zero needs a DEDICATED endpoint, which serves on its own DNS
+      // (https://<endpoint>.<location>-<project#>.prediction.vertexai.goog/...).
+      // Set the full :predict URL here; project/location/endpointId form the
+      // shared-domain URL as a fallback for non-dedicated endpoints.
+      endpointUrl: str('ACESTEP_ENDPOINT_URL'),
+      project: str('ACESTEP_PROJECT'),
+      location: str('ACESTEP_LOCATION', 'us-west1'),
+      endpointId: str('ACESTEP_ENDPOINT_ID'),
+      durationSec: int('ACESTEP_DURATION_SEC', 30),
+      // Diffusion steps for the turbo model (its default is 8). Fewer = faster
+      // with slightly rougher audio; tune without redeploying the container.
+      inferenceSteps: int('ACESTEP_INFERENCE_STEPS', 8),
+    },
     elevenlabs: {
       apiKey: str('ELEVENLABS_API_KEY'),
       baseUrl: str('ELEVENLABS_BASE_URL', 'https://api.elevenlabs.io'),
