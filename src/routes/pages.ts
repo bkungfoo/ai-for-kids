@@ -29,7 +29,7 @@ interface Feature {
 const FEATURES: Feature[] = [
   { href: '/books', icon: '📖', title: 'Storybooks', blurb: 'Read, write, and use AI to illustrate storybooks', ready: true },
   { href: '/music', icon: '🎵', title: 'Music', blurb: 'Make a song with AI', ready: true },
-  { href: '/voice', icon: '🎙️', title: 'Voices', blurb: 'Turn words into speech', ready: false },
+  { href: '/voice', icon: '🎙️', title: 'Voices', blurb: 'Make a voice that sounds like you', ready: true },
   { href: '/code', icon: '💻', title: 'Coding', blurb: 'Build something with code', ready: false },
 ];
 
@@ -3092,5 +3092,5 @@ function comingSoon(icon: string, name: string): string {
 }
 
 // (/music is served by musicPagesRouter — see routes/musicPages.ts.)
-pagesRouter.get('/voice', (_req, res) => res.type('html').send(comingSoon('🎙️', 'Voices')));
+// /voice is served by voicePagesRouter (routes/voicePages.ts).
 pagesRouter.get('/code', (_req, res) => res.type('html').send(comingSoon('💻', 'Coding')));

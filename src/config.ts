@@ -199,6 +199,10 @@ export const config = {
       // Storybook read-aloud narrator voice. When no ElevenLabs key is set the
       // reader falls back to the browser's built-in speech synthesis.
       narratorVoiceId: str('ELEVENLABS_NARRATOR_VOICE', 'EXAVITQu4vr4xnSDxMaL'),
+      // The Voices feature (kid voice cloning) uses its OWN key variable so
+      // enabling it doesn't flip the storybook narrator to ElevenLabs (that
+      // engine choice keys the narration cache — see routes/books.ts).
+      voicesApiKey: str('ELEVENLABS_VOICES_API_KEY') || str('ELEVENLABS_API_KEY'),
     },
     gemini: {
       apiKey: str('GEMINI_API_KEY'),

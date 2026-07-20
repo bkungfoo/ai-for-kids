@@ -12,6 +12,7 @@ import { runGuardedGeneration } from '../safety/guardedGeneration.js';
 import { config } from '../config.js';
 import { booksApiRouter, libraryApiRouter } from './books.js';
 import { musicApiRouter } from './musicTracks.js';
+import { voicesApiRouter } from './voices.js';
 import {
   optionalBoolean,
   optionalString,
@@ -61,6 +62,9 @@ router.use('/v1/library', libraryApiRouter);
 
 // --- Music maker: AIMusicAPI song generation + My music / library -------------
 router.use('/v1/music', musicApiRouter);
+
+// --- Voices: kid voice cloning (record -> clone -> speak) ---------------------
+router.use('/v1/voices', voicesApiRouter);
 
 // --- Voice: ElevenLabs ------------------------------------------------------
 router.post(
