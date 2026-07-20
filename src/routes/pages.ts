@@ -888,6 +888,16 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         /* While composing, the line stands where the music buttons were —
            centered like every other row on the page. */
         .musicstack .music-working { justify-content: center; font-size: 13px; }
+        /* Narrator voice picker + per-page retakes */
+        .readbtn.voice-btn { background: #efe9f7; border-color: #a58bc9; }
+        .voicepick { max-height: 46vh; overflow-y: auto; }
+        .voiceopt { display: flex; align-items: center; gap: 8px; padding: 7px 4px;
+          font-size: 14.5px; cursor: pointer; border-radius: 8px; }
+        .voiceopt:hover { background: #f3ecfb; }
+        .voiceopt input { width: 16px; height: 16px; accent-color: #7a5aa0; }
+        .voicegroup { font-size: 12px; font-weight: 800; color: #6b5d43;
+          text-transform: uppercase; letter-spacing: .5px; margin: 12px 0 2px; }
+        .voicehint { font-size: 13.5px; color: #6b5d43; margin-top: 10px; }
         /* "Getting the voices ready" dialog: the count of pages recorded so far. */
         .narr-progress { margin-top: 10px; text-align: center; font-size: 13px;
           font-weight: 700; color: #6b5d43; }
@@ -1053,9 +1063,33 @@ function readerClientJs(): string {
   let advancing = false;   // suppress stopReading() during an auto page flip
   let curReadBtn = null;   // the current spread's read button (for read-all)
   let curReadStart = null; // starts reading the current spread (set in render)
+  // Read-all pacing without background music: a beat between pages so the
+  // reader can take in the story and the artwork before the flip.
+  const PAGE_TURN_PAUSE_MS = 3000;
+  let pageTurnTimer = null;
+  function clearPageTurnPause() {
+    if (pageTurnTimer) { clearTimeout(pageTurnTimer); pageTurnTimer = null; }
+  }
+  // After a page's narration finishes in read-all: experimental sessions pace
+  // page turns with the music fade; everyone else gets a quiet 3s pause.
+  function scheduleReadAllAdvance(fade) {
+    if (expFeatures) {
+      fade.wait(() => { if (readAllMode) advanceReadAll(); });
+      return;
+    }
+    fade.wait(() => {
+      if (!readAllMode) return;
+      clearPageTurnPause();
+      pageTurnTimer = setTimeout(() => {
+        pageTurnTimer = null;
+        if (readAllMode) advanceReadAll();
+      }, PAGE_TURN_PAUSE_MS);
+    });
+  }
 
   function stopReading() {
     readAllMode = false;
+    clearPageTurnPause(); // waiting out the between-pages beat? cancel it
     clearNarrationDelay(); // vocals scheduled but not started yet? cancel them
     haltPlayback();
     stopAllBg(); // manual stop silences the music (and any fade) immediately
@@ -1255,7 +1289,7 @@ function readerClientJs(): string {
         // read-all, the page flip waits for the fade to finish.
         const fade = beginBgFade();
         if (reading && reading.btn === btn) haltPlayback();
-        if (readAllMode) fade.wait(() => { if (readAllMode) advanceReadAll(); });
+        if (readAllMode) scheduleReadAllAdvance(fade);
       });
       if (musicUrl) {
         // Let the music set the scene for a second before the vocals begin.
@@ -1327,7 +1361,7 @@ function readerClientJs(): string {
       const onDone = () => {
         const fade = beginBgFade();
         if (reading && reading.btn === btn) haltPlayback();
-        if (readAllMode) fade.wait(() => { if (readAllMode) advanceReadAll(); });
+        if (readAllMode) scheduleReadAllAdvance(fade);
       };
       // The narrator voice reads the cover intro too: cached audio -> server
       // narration -> browser voice only as the last resort.
@@ -1717,6 +1751,8 @@ function readerClientJs(): string {
       }
       right.appendChild(actionCluster([
         readAllControls(),
+        // Whole-book narrator picker: above the music buttons, creator only.
+        mine && book.status !== 'published' ? narratorVoiceControls() : null,
         editable() ? coverRegenControls() : null,
         expFeatures && editable() ? musicControls('cover', null) : null,
       ], 'cover-actions'));
@@ -1752,6 +1788,9 @@ function readerClientJs(): string {
       left.appendChild(actionCluster([
         readRow(spread - 2, p, t),
         editable() ? wordsEditControls(spread - 2, p, t) : null,
+        // Redo this page's read-aloud — always ABOVE the music buttons (which
+        // only exist for experimental sessions; otherwise this takes their spot).
+        editable() && p.text && !p.isEnd ? narrationControls(spread - 2) : null,
         // Background music, once the page has words and picture.
         expFeatures && editable() && p.text && p.image ? musicControls('page', spread - 2) : null,
         editable() ? pageToolsControls(spread - 2) : null,
@@ -2168,6 +2207,223 @@ function readerClientJs(): string {
     h.textContent = titleText;
     modal.appendChild(h);
     return { modal: modal, close: close };
+  }
+
+  // --- Narrator voice: read the whole book in one of the kid's Voices --------
+  // The cover carries a picker (default narrator / My voices / library
+  // voices); each story page gets a retake button that rerolls just that
+  // page's read-aloud and lets the creator audition two takes.
+
+  function narratorVoiceControls() {
+    const wrap = document.createElement('div');
+    wrap.className = 'readrow';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'readbtn voice-btn';
+    btn.textContent = '🎙️ Narrator: ' + (book.narratorVoiceName || 'Storybook narrator');
+    btn.addEventListener('click', openNarratorDialog);
+    wrap.appendChild(btn);
+    return wrap;
+  }
+
+  function openNarratorDialog() {
+    stopReading();
+    const dlg = openTaskDialog('🎙️ Who should read this book?');
+    const modal = dlg.modal;
+    const list = document.createElement('div');
+    list.className = 'voicepick';
+    list.textContent = 'Finding the voices…';
+    modal.appendChild(list);
+
+    const actions = document.createElement('div');
+    actions.className = 'music-actions';
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.className = 'cta';
+    save.textContent = '✅ Use this narrator';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'linkbtn';
+    cancel.textContent = '✕ Cancel';
+    cancel.addEventListener('click', () => { setStatus(''); dlg.close(); });
+    actions.appendChild(save);
+    actions.appendChild(cancel);
+    modal.appendChild(actions);
+
+    function option(value, label, checked) {
+      const row = document.createElement('label');
+      row.className = 'voiceopt';
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'narrator';
+      radio.value = value;
+      radio.checked = checked;
+      row.appendChild(radio);
+      row.appendChild(document.createTextNode(' ' + label));
+      return row;
+    }
+
+    (async () => {
+      let mineVoices = [];
+      let libraryVoices = [];
+      try {
+        const results = await Promise.all([fetch('/v1/voices'), fetch('/v1/voices/library')]);
+        const md = await results[0].json().catch(() => ({}));
+        const ld = await results[1].json().catch(() => ({}));
+        if (results[0].ok && md.ok) mineVoices = md.voices;
+        if (results[1].ok && ld.ok) libraryVoices = ld.voices.filter((v) => !v.mine);
+      } catch {}
+      list.textContent = '';
+      const current = book.narratorVoiceId || '';
+      list.appendChild(option('', '📖 Storybook narrator (default)', current === ''));
+      if (mineVoices.length) {
+        const h = document.createElement('div');
+        h.className = 'voicegroup';
+        h.textContent = '🗣️ My voices';
+        list.appendChild(h);
+        for (const v of mineVoices) list.appendChild(option(v.id, v.name, current === v.id));
+      }
+      if (libraryVoices.length) {
+        const h = document.createElement('div');
+        h.className = 'voicegroup';
+        h.textContent = '📚 From the library';
+        list.appendChild(h);
+        for (const v of libraryVoices) list.appendChild(option(v.id, v.name, current === v.id));
+      }
+      if (!mineVoices.length && !libraryVoices.length) {
+        const hint = document.createElement('div');
+        hint.className = 'voicehint';
+        hint.innerHTML = 'Want the book read in YOUR voice? <a href="/voice/new">Create one in Voices</a> first!';
+        list.appendChild(hint);
+      }
+    })();
+
+    save.addEventListener('click', async () => {
+      const picked = modal.querySelector('input[name="narrator"]:checked');
+      if (!picked) { setStatus('Pick a narrator first! 🎙️', 'blocked'); return; }
+      save.disabled = true;
+      try {
+        const res = await fetch('/v1/books/' + bookId + '/narrator-voice', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ voiceId: picked.value || null }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
+          book = data.book;
+          dlg.close();
+          render();
+          // Re-record every page in the new voice now (cached once done), and
+          // when the book is in reading mode show the friendly wait dialog.
+          try { fetch('/v1/books/' + bookId + '/warm-narration', { method: 'POST' }); } catch {}
+          if (!editMode) watchNarrationReadiness();
+          setStatus('🎙️ ' + (book.narratorVoiceName ? book.narratorVoiceName + ' will read this book!' : 'Back to the storybook narrator!') + ' New recordings are being made now.');
+          return;
+        }
+        const f = friendlyError(res, data);
+        setStatus(f.text, f.cls);
+        save.disabled = false;
+      } catch {
+        setStatus('Could not reach the server. Check your connection and try again.', 'error');
+        save.disabled = false;
+      }
+    });
+  }
+
+  function narrationControls(pageIndex) {
+    const wrap = document.createElement('div');
+    wrap.className = 'readrow';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'readbtn voice-btn';
+    btn.textContent = "🎙️ Redo this page's voice";
+    btn.addEventListener('click', () => openNarrationRetakeDialog(pageIndex));
+    wrap.appendChild(btn);
+    return wrap;
+  }
+
+  function openNarrationRetakeDialog(pageIndex) {
+    stopReading();
+    const dlg = openTaskDialog('🎙️ New voice takes for this page');
+    const modal = dlg.modal;
+    const line = document.createElement('div');
+    line.className = 'music-working';
+    line.innerHTML = '<span class="notes-anim">🎙️</span><span>Recording two fresh takes…</span>';
+    modal.appendChild(line);
+    const cancelRow = document.createElement('div');
+    cancelRow.className = 'music-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'linkbtn';
+    cancel.textContent = '✕ Cancel — keep the old voice';
+    cancel.addEventListener('click', () => { setStatus(''); dlg.close(); });
+    cancelRow.appendChild(cancel);
+    modal.appendChild(cancelRow);
+
+    (async () => {
+      let data;
+      try {
+        const res = await fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/narration-takes', { method: 'POST' });
+        data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          const f = friendlyError(res, data);
+          setStatus(f.text, f.cls);
+          dlg.close();
+          return;
+        }
+      } catch {
+        setStatus('Could not reach the server. Check your connection and try again.', 'error');
+        dlg.close();
+        return;
+      }
+      line.remove();
+      const label = document.createElement('label');
+      label.textContent = 'Pick the reading you like best!';
+      modal.insertBefore(label, cancelRow);
+      for (let n = 1; n <= (data.clips || 0); n++) {
+        const card = document.createElement('div');
+        card.className = 'music-cand';
+        const title = document.createElement('div');
+        title.className = 'mc-title';
+        title.textContent = '🎙️ Take ' + n;
+        card.appendChild(title);
+        const audio = document.createElement('audio');
+        audio.controls = true;
+        audio.preload = 'none';
+        audio.src = '/v1/books/' + bookId + '/narration-take/' + data.setId + '/audio/' + n;
+        card.appendChild(audio);
+        const use = document.createElement('button');
+        use.type = 'button';
+        use.className = 'cta';
+        use.textContent = '✅ Use this take';
+        use.addEventListener('click', async () => {
+          modal.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+          try {
+            const res = await fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/narration-accept', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ setId: data.setId, choice: n }),
+            });
+            const rd = await res.json().catch(() => ({}));
+            if (res.ok && rd.ok) {
+              book = rd.book;
+              dlg.close();
+              setStatus('🎙️ New voice saved for this page!');
+              render();
+              return;
+            }
+            const f = friendlyError(res, rd);
+            setStatus(f.text, f.cls);
+            modal.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+          } catch {
+            setStatus('Could not reach the server. Check your connection and try again.', 'error');
+            modal.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+          }
+        });
+        card.appendChild(use);
+        modal.insertBefore(card, cancelRow);
+      }
+    })();
   }
 
   function musicTarget(kind, index) {

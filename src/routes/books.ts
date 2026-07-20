@@ -27,6 +27,7 @@ import {
   updateCover,
   updateCoverMusic,
   updateIntroNarration,
+  updateNarratorVoice,
   updatePage,
   pageMusicFile,
   savePageMusicAudio,
@@ -54,6 +55,8 @@ import {
 } from '../providers/aiMusic.js';
 import { generateMubertTrack, mubertConfigured } from '../providers/mubert.js';
 import { aceStepConfigured, generateAceStepTrack } from '../providers/aceStep.js';
+import { speakWithVoice } from '../providers/elevenVoices.js';
+import { getVoice } from '../voices/voiceStore.js';
 import { optionalString, requireString, ValidationError } from './validate.js';
 
 /**
@@ -385,9 +388,9 @@ booksApiRouter.get(
     // Hide narration cached under an old voice/speed so the reader regenerates
     // instead of playing stale audio (response only; the file is untouched).
     for (const page of book.pages) {
-      if (page.narration && !validNarration(page)) delete page.narration;
+      if (page.narration && !validNarration(book, page)) delete page.narration;
     }
-    if (book.introNarration && book.introNarration.key !== narrationKey()) {
+    if (book.introNarration && book.introNarration.key !== narrationKeyFor(book)) {
       delete book.introNarration;
     }
     // `mine` lets the reader offer owner-only actions (e.g. unpublish) even on
@@ -574,8 +577,22 @@ function narrationKey(): string {
   return `gt:${model}:${voice}:${speed}:r2`;
 }
 
-function validNarration(page: BookPage) {
-  return page.narration && page.narration.key === narrationKey() ? page.narration : undefined;
+/**
+ * The cache key for THIS book's narration: a kid-chosen Voices narrator keys
+ * on the voice id + delivery settings; otherwise the default engine's key.
+ * Selecting a different narrator changes the key, so every page regenerates
+ * (and re-caches) in the new voice without touching stored audio.
+ */
+function narrationKeyFor(book: Book): string {
+  if (book.narratorVoiceId) {
+    const { voicesModel, voicesSpeed } = config.providers.elevenlabs;
+    return `elv:${book.narratorVoiceId}:${voicesModel}:${voicesSpeed}:r1`;
+  }
+  return narrationKey();
+}
+
+function validNarration(book: Book, page: BookPage) {
+  return page.narration && page.narration.key === narrationKeyFor(book) ? page.narration : undefined;
 }
 
 /** True when some read-aloud engine is available server-side (else the reader
@@ -586,11 +603,48 @@ function narrationConfigured(): boolean {
 }
 
 /**
- * Synthesize narration for one page's words through the guarded pipeline.
- * Engine: ElevenLabs when its key is set, else Gemini TTS on the AI Studio
- * key. Returns the narration payload, or the non-200 outcome for forwarding.
+ * Synthesize narration for one of this book's pages. A book with a chosen
+ * Voices narrator speaks through the cloned voice (expressive v3 + pauses,
+ * same path as the Voices feature — the text is already-moderated book
+ * content); otherwise the default engine (ElevenLabs narrator when its key is
+ * set, else Gemini TTS). Returns the narration payload, or the non-200
+ * outcome for forwarding.
  */
-async function synthesizeNarration(text: string) {
+async function synthesizeNarrationFor(book: Book, text: string) {
+  if (book.narratorVoiceId) {
+    const voice = await getVoice(book.narratorVoiceId);
+    if (voice) {
+      try {
+        const audio = await speakWithVoice(voice.elevenVoiceId, text);
+        return {
+          outcome: { status: 200, body: { ok: true } } as const,
+          narration: {
+            mimeType: audio.mimeType,
+            dataBase64: audio.bytes.toString('base64'),
+            voiceId: voice.id,
+            key: narrationKeyFor(book),
+          },
+        };
+      } catch (err) {
+        logger.warn('custom-voice narration failed', {
+          bookId: book.id,
+          voiceId: book.narratorVoiceId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return {
+          outcome: { status: 502, body: { ok: false, error: 'The narrator voice had trouble — try again!' } },
+          narration: undefined,
+        };
+      }
+    }
+    // The chosen voice was deleted from the Voices store: fall through to the
+    // default engine so the book still reads aloud. (The audio caches under
+    // the custom key — consistent, just no longer the kid's clone.)
+    logger.warn('narrator voice missing — using default engine', {
+      bookId: book.id,
+      voiceId: book.narratorVoiceId,
+    });
+  }
   const outcome = elevenLabsProvider.isConfigured()
     ? await runGuardedGeneration(elevenLabsProvider, {
         text,
@@ -609,7 +663,7 @@ async function synthesizeNarration(text: string) {
       mimeType: result.contentType,
       dataBase64: result.audioBase64,
       voiceId: result.voiceId,
-      key: narrationKey(),
+      key: narrationKeyFor(book),
     },
   };
 }
@@ -623,12 +677,14 @@ async function synthesizeNarration(text: string) {
 function warmNarration(bookId: string, pageIndex: number, text: string): Promise<void> {
   return (async () => {
     try {
-      const { narration } = await synthesizeNarration(text);
+      const forBook = await getBook(bookId);
+      if (!forBook) return;
+      const { narration } = await synthesizeNarrationFor(forBook, text);
       if (!narration) return; // engine unconfigured / blocked — nothing to warm
       const book = await getBook(bookId);
       const page = book?.pages[pageIndex];
       if (!book || !page || page.text !== text) return; // page changed/moved meanwhile
-      if (validNarration(page)) return; // someone already narrated it
+      if (validNarration(book, page)) return; // someone already narrated it
       await updatePage(bookId, pageIndex, { narration });
       logger.info('narration pre-generated', { bookId, pageIndex, bytes: narration.dataBase64.length });
     } catch (err) {
@@ -656,11 +712,11 @@ function warmIntroNarration(bookId: string): Promise<void> {
       const book = await getBook(bookId);
       if (!book) return;
       const text = introText(book);
-      const { narration } = await synthesizeNarration(text);
+      const { narration } = await synthesizeNarrationFor(book, text);
       if (!narration) return;
       const fresh = await getBook(bookId);
       if (!fresh || introText(fresh) !== text) return; // authors changed meanwhile
-      if (fresh.introNarration && fresh.introNarration.key === narrationKey()) return;
+      if (fresh.introNarration && fresh.introNarration.key === narrationKeyFor(fresh)) return;
       await updateIntroNarration(bookId, narration);
       logger.info('intro narration pre-generated', { bookId });
     } catch (err) {
@@ -684,14 +740,14 @@ booksApiRouter.post(
       return;
     }
     const cached =
-      book.introNarration && book.introNarration.key === narrationKey()
+      book.introNarration && book.introNarration.key === narrationKeyFor(book)
         ? book.introNarration
         : undefined;
     if (cached) {
       res.json({ ok: true, narration: cached, cached: true });
       return;
     }
-    const { outcome, narration } = await synthesizeNarration(introText(book));
+    const { outcome, narration } = await synthesizeNarrationFor(book, introText(book));
     if (!narration) {
       res.status(outcome.status).json(outcome.body);
       return;
@@ -723,7 +779,7 @@ booksApiRouter.post(
     }
 
     // Cached (and still matching the current voice/speed)? Replay for free.
-    const cached = validNarration(page);
+    const cached = validNarration(book, page);
     if (cached) {
       res.json({ ok: true, narration: cached, pageIndex: index, cached: true });
       return;
@@ -731,7 +787,7 @@ booksApiRouter.post(
 
     // 501 only when no narrator engine is configured — the reader then falls
     // back to the browser's built-in speech synthesis.
-    const { outcome, narration } = await synthesizeNarration(page.text);
+    const { outcome, narration } = await synthesizeNarrationFor(book, page.text);
     if (!narration) {
       res.status(outcome.status).json(outcome.body);
       return;
@@ -757,10 +813,10 @@ booksApiRouter.get(
     for (const page of book.pages) {
       if (!page.text) continue; // nothing to read aloud on this page
       total += 1;
-      if (validNarration(page)) done += 1;
+      if (validNarration(book, page)) done += 1;
     }
     // The cover intro (title + authors) is always spoken, so it counts too.
-    const introReady = !!(book.introNarration && book.introNarration.key === narrationKey());
+    const introReady = !!(book.introNarration && book.introNarration.key === narrationKeyFor(book));
     total += 1;
     if (introReady) done += 1;
     // With no engine configured there's nothing to generate or wait for — the
@@ -792,9 +848,9 @@ booksApiRouter.post(
     // is already recorded (e.g. a second reader opened the same book).
     const pending: Array<() => Promise<void>> = [];
     book.pages.forEach((page, index) => {
-      if (page.text && !validNarration(page)) pending.push(() => warmNarration(bookId, index, page.text));
+      if (page.text && !validNarration(book, page)) pending.push(() => warmNarration(bookId, index, page.text));
     });
-    if (!(book.introNarration && book.introNarration.key === narrationKey())) {
+    if (!(book.introNarration && book.introNarration.key === narrationKeyFor(book))) {
       pending.push(() => warmIntroNarration(bookId));
     }
     void (async () => {
@@ -807,6 +863,172 @@ booksApiRouter.post(
       }
     })();
     res.status(202).json({ ok: true, configured: true, warming: pending.length });
+  }),
+);
+
+
+// --- Narrator voice: read the whole book in a Voices-feature voice ---------------
+
+// Pick (or clear) the book's narrator. The voice must be the owner's own or a
+// published library voice. Cached narration re-keys automatically, so pages
+// regenerate in the new voice on demand (or in bulk via warm-narration).
+booksApiRouter.post(
+  '/:id/narrator-voice',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+    const raw = (req.body as { voiceId?: unknown }).voiceId;
+    let updated: Book | undefined;
+    if (raw === null || raw === undefined || raw === '') {
+      updated = await updateNarratorVoice(bookId, null, null);
+    } else {
+      if (typeof raw !== 'string' || raw.length > 64) throw new ValidationError('Bad voiceId');
+      const voice = await getVoice(raw);
+      if (!voice || (voice.owner !== currentUser(req) && voice.status !== 'published')) {
+        res.status(404).json({ ok: false, error: 'Voice not found' });
+        return;
+      }
+      updated = await updateNarratorVoice(bookId, voice.id, voice.name);
+    }
+    res.json({ ok: true, book: updated });
+  }),
+);
+
+// --- Narration retakes: redo one page's read-aloud ------------------------------
+// The creator hears fresh takes before anything is replaced: takes live in
+// memory (like music jobs), the child previews each, and only the accepted
+// one is written into the page's narration cache.
+
+interface NarrationTakeSet {
+  id: string;
+  owner: string | undefined;
+  bookId: string;
+  pageIndex: number;
+  clips: Array<{ mimeType: string; dataBase64: string }>;
+  createdAt: number;
+}
+const narrationTakes = new Map<string, NarrationTakeSet>();
+const NARRATION_TAKES_TTL_MS = 30 * 60 * 1000;
+function pruneNarrationTakes(): void {
+  const now = Date.now();
+  for (const [id, set] of narrationTakes) {
+    if (now - set.createdAt > NARRATION_TAKES_TTL_MS) narrationTakes.delete(id);
+  }
+}
+
+booksApiRouter.post(
+  '/:id/pages/:index/narration-takes',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const index = Number.parseInt(req.params.index ?? '', 10);
+    const book = await getOwnedBook(bookId, currentUser(req));
+    const page = Number.isInteger(index) && index >= 0 ? book?.pages[index] : undefined;
+    if (!book || !page) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    if (!page.text.trim()) {
+      res.status(409).json({ ok: false, error: 'This page has no words to read' });
+      return;
+    }
+    if (!narrationConfigured()) {
+      res.status(501).json({ ok: false, error: 'The narrator is not configured yet' });
+      return;
+    }
+    pruneNarrationTakes();
+    // Two fresh takes (the engines vary between generations — that IS the
+    // reroll). Sequential to be gentle on the providers.
+    const clips: Array<{ mimeType: string; dataBase64: string }> = [];
+    for (let n = 0; n < 2; n++) {
+      const { outcome, narration } = await synthesizeNarrationFor(book, page.text);
+      if (!narration) {
+        if (clips.length === 0) {
+          res.status(outcome.status).json(outcome.body);
+          return;
+        }
+        break; // one good take beats an error
+      }
+      clips.push({ mimeType: narration.mimeType, dataBase64: narration.dataBase64 });
+    }
+    const set: NarrationTakeSet = {
+      id: randomUUID(),
+      owner: currentUser(req),
+      bookId,
+      pageIndex: index,
+      clips,
+      createdAt: Date.now(),
+    };
+    narrationTakes.set(set.id, set);
+    res.json({ ok: true, setId: set.id, clips: clips.length });
+  }),
+);
+
+function takeSetFor(req: Request): NarrationTakeSet | undefined {
+  const set = narrationTakes.get(req.params.setId ?? '');
+  if (!set || set.owner !== currentUser(req) || set.bookId !== (req.params.id ?? '')) {
+    return undefined;
+  }
+  return set;
+}
+
+// Preview one take (streamed from memory).
+booksApiRouter.get('/:id/narration-take/:setId/audio/:n', (req: Request, res: Response) => {
+  const set = takeSetFor(req);
+  const n = Number.parseInt(req.params.n ?? '', 10);
+  const clip = set && Number.isInteger(n) ? set.clips[n - 1] : undefined;
+  if (!set || !clip) {
+    res.status(404).json({ ok: false, error: 'Not found' });
+    return;
+  }
+  const bytes = Buffer.from(clip.dataBase64, 'base64');
+  res.set('content-type', clip.mimeType);
+  res.set('content-length', String(bytes.length));
+  res.send(bytes);
+});
+
+// Accept a take: it becomes the page's cached narration. Cancel is simply
+// never calling this (the set times out of memory on its own).
+booksApiRouter.post(
+  '/:id/pages/:index/narration-accept',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const index = Number.parseInt(req.params.index ?? '', 10);
+    const setId = requireString(req.body, 'setId', { maxLength: 64 });
+    const choice = Number((req.body as { choice?: unknown }).choice);
+    const book = await getOwnedBook(bookId, currentUser(req));
+    const page = Number.isInteger(index) && index >= 0 ? book?.pages[index] : undefined;
+    if (!book || !page) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    const set = narrationTakes.get(setId);
+    const clip =
+      set && set.owner === currentUser(req) && set.bookId === bookId && set.pageIndex === index
+        ? set.clips[choice - 1]
+        : undefined;
+    if (!clip) {
+      res.status(404).json({ ok: false, error: 'That take is no longer available — try again!' });
+      return;
+    }
+    const updated = await updatePage(bookId, index, {
+      narration: {
+        mimeType: clip.mimeType,
+        dataBase64: clip.dataBase64,
+        voiceId: book.narratorVoiceId ?? 'default',
+        key: narrationKeyFor(book),
+      },
+    });
+    if (!updated) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    narrationTakes.delete(setId);
+    res.json({ ok: true, book: updated, pageIndex: index });
   }),
 );
 

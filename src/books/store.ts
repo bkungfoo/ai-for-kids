@@ -109,6 +109,15 @@ export interface Book {
    * authors change.
    */
   introNarration?: BookNarration;
+  /**
+   * Narrator for the whole book: the id of a Voices-feature voice (the kid's
+   * own clone or a library voice). Absent/null = the default storybook
+   * narrator. Changing it re-keys the narration cache, so pages regenerate
+   * lazily in the new voice and stay cached per voice.
+   */
+  narratorVoiceId?: string | null;
+  /** Display name of that voice, denormalized for the reader UI. */
+  narratorVoiceName?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -221,6 +230,28 @@ export async function updateIntroNarration(
   if (!book) return undefined;
   if (narration) book.introNarration = narration;
   else delete book.introNarration;
+  await save(book);
+  return book;
+}
+
+/** Set (or clear, with null) the book-wide narrator voice. Cached narration is
+ * left in place — the narration cache key includes the voice, so stale audio
+ * simply stops matching and regenerates in the new voice on demand. */
+export async function updateNarratorVoice(
+  id: string,
+  voiceId: string | null,
+  voiceName: string | null,
+): Promise<Book | undefined> {
+  const book = await getBook(id);
+  if (!book) return undefined;
+  if (voiceId) {
+    book.narratorVoiceId = voiceId;
+    book.narratorVoiceName = voiceName;
+  } else {
+    delete book.narratorVoiceId;
+    delete book.narratorVoiceName;
+  }
+  book.updatedAt = new Date().toISOString();
   await save(book);
   return book;
 }
