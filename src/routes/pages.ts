@@ -1063,15 +1063,17 @@ function readerClientJs(): string {
   let advancing = false;   // suppress stopReading() during an auto page flip
   let curReadBtn = null;   // the current spread's read button (for read-all)
   let curReadStart = null; // starts reading the current spread (set in render)
-  // Read-all pacing without background music: a beat between pages so the
-  // reader can take in the story and the artwork before the flip.
-  const PAGE_TURN_PAUSE_MS = 3000;
+  // Read-all pacing without background music: a beat on the finished page
+  // (soak in the art), then the flip, then a smaller beat before the next
+  // page's words begin.
+  const PRE_FLIP_PAUSE_MS = 2000;
+  const POST_FLIP_PAUSE_MS = 1000;
   let pageTurnTimer = null;
   function clearPageTurnPause() {
     if (pageTurnTimer) { clearTimeout(pageTurnTimer); pageTurnTimer = null; }
   }
   // After a page's narration finishes in read-all: experimental sessions pace
-  // page turns with the music fade; everyone else gets a quiet 3s pause.
+  // page turns with the music fade; everyone else gets the quiet 2s+1s beats.
   function scheduleReadAllAdvance(fade) {
     if (expFeatures) {
       fade.wait(() => { if (readAllMode) advanceReadAll(); });
@@ -1082,8 +1084,8 @@ function readerClientJs(): string {
       clearPageTurnPause();
       pageTurnTimer = setTimeout(() => {
         pageTurnTimer = null;
-        if (readAllMode) advanceReadAll();
-      }, PAGE_TURN_PAUSE_MS);
+        if (readAllMode) advanceReadAll(POST_FLIP_PAUSE_MS);
+      }, PRE_FLIP_PAUSE_MS);
     });
   }
 
@@ -1313,7 +1315,10 @@ function readerClientJs(): string {
   }
 
   // After a page finishes in read-all: flip forward and read the next spread.
-  function advanceReadAll() {
+  // postDelayMs (non-experimental pacing) holds the fresh page quietly for a
+  // beat before its words begin; skipped spreads carry the delay forward so
+  // the pause lands on the page that actually gets read.
+  function advanceReadAll(postDelayMs) {
     if (!readAllMode || !book) return;
     const lastPageSpread = book.pages.length + 1;
     if (spread >= lastPageSpread) { readAllMode = false; return; }
@@ -1321,9 +1326,17 @@ function readerClientJs(): string {
     spread++;
     render();
     advancing = false;
-    if (spread === 1) { advanceReadAll(); return; } // skip the title page
-    if (curReadStart) curReadStart();
-    else advanceReadAll(); // nothing readable here — keep going
+    if (spread === 1) { advanceReadAll(postDelayMs); return; } // skip the title page
+    if (!curReadStart) { advanceReadAll(postDelayMs); return; } // nothing readable here — keep going
+    if (postDelayMs) {
+      clearPageTurnPause();
+      pageTurnTimer = setTimeout(() => {
+        pageTurnTimer = null;
+        if (readAllMode && curReadStart) curReadStart();
+      }, postDelayMs);
+      return;
+    }
+    curReadStart();
   }
 
   /** Cover button: read the whole book, flipping pages automatically. */
