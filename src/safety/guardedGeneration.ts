@@ -8,7 +8,7 @@ import {
 import { sendOperatorAlert } from '../util/alerts.js';
 import { CreditsExhaustedError, isCreditsErrorMessage } from '../util/credits.js';
 import { recordBlocked } from './blockedStore.js';
-import { guardText } from './pipeline.js';
+import { guardText, permittedAtLevel, type SafetyLevel } from './pipeline.js';
 import { safeSearchImages } from './safeSearch.js';
 import type { Verdict } from './types.js';
 
@@ -37,6 +37,7 @@ export interface PublicVerdict {
 export async function runGuardedGeneration<Req>(
   provider: Provider<Req>,
   req: Req,
+  opts?: { safetyLevel?: SafetyLevel },
 ): Promise<GuardOutcome> {
   if (!provider.isConfigured()) {
     return { status: 501, body: { ok: false, error: `${provider.name} is not configured` } };
@@ -44,7 +45,7 @@ export async function runGuardedGeneration<Req>(
 
   // 1. Input moderation — fail fast, no provider call, no cost spent upstream.
   const inputVerdict = await guardText(provider.inputTexts(req), 'input');
-  if (!inputVerdict.allowed) {
+  if (!permittedAtLevel(inputVerdict, opts?.safetyLevel)) {
     logger.warn('blocked on input', {
       provider: provider.name,
       categories: inputVerdict.categories,
@@ -90,7 +91,7 @@ export async function runGuardedGeneration<Req>(
     [...generation.textToModerate, ...generation.metadataToModerate],
     'output',
   );
-  if (!outputVerdict.allowed) {
+  if (!permittedAtLevel(outputVerdict, opts?.safetyLevel)) {
     logger.warn('blocked on output', {
       provider: provider.name,
       categories: outputVerdict.categories,

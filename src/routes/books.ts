@@ -3,11 +3,11 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { Router, type Request, type Response } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { currentUser, experimentalEnabled } from '../middleware/requireAuth.js';
+import { currentUser, experimentalEnabled, safetyLevelFor } from '../middleware/requireAuth.js';
 import { imageProviderFor } from '../providers/imageProvider.js';
 import type { ImageEngine } from '../providers/types.js';
 import { runGuardedGeneration } from '../safety/guardedGeneration.js';
-import { guardText } from '../safety/pipeline.js';
+import { guardText, permittedAtLevel } from '../safety/pipeline.js';
 import {
   addPage,
   createBook,
@@ -264,7 +264,7 @@ booksApiRouter.post(
 
     // Title and author names are shown back on the cover — moderate them first.
     const titleVerdict = await guardText([title, ...authors], 'input');
-    if (!titleVerdict.allowed) {
+    if (!permittedAtLevel(titleVerdict, safetyLevelFor(req))) {
       res.status(403).json({
         ok: false,
         blocked: true,
@@ -280,7 +280,7 @@ booksApiRouter.post(
     // the look that later pages copy.
     const outcome = await runGuardedGeneration(imageProviderFor(imageEngine), {
       prompt: coverPrompt(title, userCoverPrompt),
-    });
+    }, { safetyLevel: safetyLevelFor(req) });
     if (outcome.status !== 200) {
       res.status(outcome.status).json(outcome.body);
       return;
@@ -316,7 +316,7 @@ booksApiRouter.post(
 
     const outcome = await runGuardedGeneration(imageProviderFor(book.imageEngine), {
       prompt: coverPrompt(book.title, userCoverPrompt),
-    });
+    }, { safetyLevel: safetyLevelFor(req) });
     if (outcome.status !== 200) {
       res.status(outcome.status).json(outcome.body);
       return;
@@ -423,7 +423,7 @@ booksApiRouter.post(
 
     // The story sentences are stored and displayed back — moderate them first.
     const textVerdict = await guardText([text], 'input');
-    if (!textVerdict.allowed) {
+    if (!permittedAtLevel(textVerdict, safetyLevelFor(req))) {
       res.status(403).json({
         ok: false,
         blocked: true,
@@ -444,7 +444,7 @@ booksApiRouter.post(
       prompt: pageScenePrompt(existing, text, imagePrompt, refs.length > 0),
       context: wholeStoryContext(existing.pages, targetPos),
       referenceImages: refs,
-    });
+    }, { safetyLevel: safetyLevelFor(req) });
     if (outcome.status !== 200) {
       res.status(outcome.status).json(outcome.body);
       return;
@@ -489,7 +489,7 @@ booksApiRouter.post(
       prompt: pageScenePrompt(book, page.text, imagePrompt, refs.length > 0),
       context: wholeStoryContext(book.pages, index),
       referenceImages: refs,
-    });
+    }, { safetyLevel: safetyLevelFor(req) });
     if (outcome.status !== 200) {
       res.status(outcome.status).json(outcome.body);
       return;
@@ -532,7 +532,7 @@ booksApiRouter.patch(
 
     // The new story words are stored and displayed back — moderate them first.
     const verdict = await guardText([text], 'input');
-    if (!verdict.allowed) {
+    if (!permittedAtLevel(verdict, safetyLevelFor(req))) {
       res.status(403).json({
         ok: false,
         blocked: true,
@@ -1058,7 +1058,7 @@ booksApiRouter.post(
       book,
       pageIndex: index,
       sourceText,
-    });
+    }, { safetyLevel: safetyLevelFor(req) });
     if (outcome.status !== 200) {
       res.status(outcome.status).json(outcome.body);
       return;
@@ -1096,7 +1096,7 @@ booksApiRouter.post(
     }
     if (book.status === 'published') return publishedConflict(res);
 
-    const outcome = await runGuardedGeneration(suggestPromptProvider, { book, text });
+    const outcome = await runGuardedGeneration(suggestPromptProvider, { book, text }, { safetyLevel: safetyLevelFor(req) });
     res.status(outcome.status).json(outcome.body);
   }),
 );
@@ -1127,7 +1127,7 @@ booksApiRouter.post(
       book,
       text,
       ...(excludeIndex !== undefined ? { excludeIndex } : {}),
-    });
+    }, { safetyLevel: safetyLevelFor(req) });
     res.status(outcome.status).json(outcome.body);
   }),
 );
@@ -1170,7 +1170,7 @@ booksApiRouter.post(
       text,
       targetPos,
       ...(excludeIndex !== undefined ? { excludeIndex } : {}),
-    });
+    }, { safetyLevel: safetyLevelFor(req) });
     res.status(outcome.status).json(outcome.body);
   }),
 );
@@ -1405,7 +1405,7 @@ booksApiRouter.post(
 
     // The child may have edited the prompt — moderate it as input.
     const verdict = await guardText([prompt], 'input');
-    if (!verdict.allowed) {
+    if (!permittedAtLevel(verdict, safetyLevelFor(req))) {
       res.status(403).json({
         ok: false,
         blocked: true,
@@ -1643,7 +1643,7 @@ booksApiRouter.post(
     if (book.status === 'published') return publishedConflict(res);
 
     const verdict = await guardText([prompt], 'input');
-    if (!verdict.allowed) {
+    if (!permittedAtLevel(verdict, safetyLevelFor(req))) {
       res.status(403).json({
         ok: false,
         blocked: true,
@@ -1947,7 +1947,7 @@ booksApiRouter.patch(
     // Author names are displayed on the title page — moderate them.
     if (authors.length > 0) {
       const verdict = await guardText(authors, 'input');
-      if (!verdict.allowed) {
+      if (!permittedAtLevel(verdict, safetyLevelFor(req))) {
         res.status(403).json({
           ok: false,
           blocked: true,

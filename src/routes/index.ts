@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { experimentalState, requireApiAuth, setExperimental } from '../middleware/requireAuth.js';
+import { experimentalState, requireApiAuth, safetyLevelFor, setExperimental } from '../middleware/requireAuth.js';
 import { claudeCodeProvider } from '../providers/claudeCode.js';
 import { elevenLabsProvider } from '../providers/elevenlabs.js';
 import { geminiProvider } from '../providers/gemini.js';
@@ -50,8 +50,8 @@ router.get('/v1/experimental', (req: Request, res: Response) => {
   res.json({ ok: true, ...experimentalState(req) });
 });
 router.post('/v1/experimental', (req: Request, res: Response) => {
-  const enabled = (req.body as { enabled?: unknown } | undefined)?.enabled === true;
-  setExperimental(req, enabled);
+  const body = (req.body ?? {}) as { enabled?: unknown; safetyLevel?: unknown };
+  setExperimental(req, body.enabled === true, body.safetyLevel);
   res.json({ ok: true, ...experimentalState(req) });
 });
 
@@ -75,7 +75,7 @@ router.post(
       voiceId: optionalString(req.body, 'voiceId', { maxLength: 100 }),
       modelId: optionalString(req.body, 'modelId', { maxLength: 100 }),
     };
-    const outcome = await runGuardedGeneration(elevenLabsProvider, reqBody);
+    const outcome = await runGuardedGeneration(elevenLabsProvider, reqBody, { safetyLevel: safetyLevelFor(req) });
     res.status(outcome.status).json(outcome.body);
   }),
 );
@@ -88,7 +88,7 @@ router.post(
       prompt: requireString(req.body, 'prompt'),
       model: optionalString(req.body, 'model', { maxLength: 100 }),
     };
-    const outcome = await runGuardedGeneration(storyImageProvider(), reqBody);
+    const outcome = await runGuardedGeneration(storyImageProvider(), reqBody, { safetyLevel: safetyLevelFor(req) });
     res.status(outcome.status).json(outcome.body);
   }),
 );
@@ -98,7 +98,7 @@ router.post(
   '/v1/code',
   asyncHandler(async (req, res) => {
     const reqBody = { prompt: requireString(req.body, 'prompt', { maxLength: 8000 }) };
-    const outcome = await runGuardedGeneration(claudeCodeProvider, reqBody);
+    const outcome = await runGuardedGeneration(claudeCodeProvider, reqBody, { safetyLevel: safetyLevelFor(req) });
     res.status(outcome.status).json(outcome.body);
   }),
 );

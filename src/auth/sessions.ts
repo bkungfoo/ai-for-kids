@@ -22,6 +22,9 @@ interface SessionRecord {
   expFeatures: boolean;
   /** The opt-in dialog has been answered this session (don't re-show it). */
   expPrompted: boolean;
+  /** Moderation strictness for THIS session (primary account only; resets on
+   * login). Undefined/strict for everyone else. */
+  safetyLevel: string;
 }
 
 const sessions = new Map<string, SessionRecord>();
@@ -38,16 +41,22 @@ export function createSession(
     expiresAt: Date.now() + ttlMs,
     expFeatures: false,
     expPrompted: false,
+    safetyLevel: 'BLOCK_LOW_AND_ABOVE',
   });
   return token;
 }
 
-/** Record the experimental-features choice for this session. */
-export function setSessionExperimental(token: string | undefined, enabled: boolean): void {
+/** Record the experimental-features + safety-level choices for this session. */
+export function setSessionExperimental(
+  token: string | undefined,
+  enabled: boolean,
+  safetyLevel?: string,
+): void {
   const record = getSession(token);
   if (!record) return;
   record.expFeatures = enabled;
   record.expPrompted = true;
+  if (safetyLevel) record.safetyLevel = safetyLevel;
 }
 
 export function getSession(token: string | undefined): SessionRecord | undefined {

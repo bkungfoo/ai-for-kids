@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { config } from '../config.js';
 import { parseCookies } from '../auth/cookies.js';
 import { getSession, setSessionExperimental } from '../auth/sessions.js';
+import { SAFETY_LEVELS, type SafetyLevel } from '../safety/pipeline.js';
 
 function isAuthed(req: Request): boolean {
   const token = parseCookies(req)[config.auth.cookieName];
@@ -30,6 +31,7 @@ export function experimentalState(req: Request): {
   eligible: boolean;
   enabled: boolean;
   prompted: boolean;
+  safetyLevel: string;
 } {
   const token = parseCookies(req)[config.auth.cookieName];
   const session = getSession(token);
@@ -37,13 +39,29 @@ export function experimentalState(req: Request): {
     eligible: experimentalEligible(req),
     enabled: session?.expFeatures ?? false,
     prompted: session?.expPrompted ?? false,
+    safetyLevel: safetyLevelFor(req) ?? 'BLOCK_LOW_AND_ABOVE',
   };
 }
 
-/** Record the dialog answer. Only the eligible account can ever enable. */
-export function setExperimental(req: Request, enabled: boolean): void {
+/** Record the dialog answers. Only the eligible account can ever enable
+ * experimental features or relax the safety level. */
+export function setExperimental(req: Request, enabled: boolean, safetyLevel?: unknown): void {
   const token = parseCookies(req)[config.auth.cookieName];
-  setSessionExperimental(token, enabled && experimentalEligible(req));
+  const eligible = experimentalEligible(req);
+  const level =
+    eligible && typeof safetyLevel === 'string' && (SAFETY_LEVELS as readonly string[]).includes(safetyLevel)
+      ? safetyLevel
+      : undefined;
+  setSessionExperimental(token, enabled && eligible, level);
+}
+
+/** The session's moderation strictness — undefined means strictest. Only the
+ * primary account's sessions can ever hold a relaxed level. */
+export function safetyLevelFor(req: Request): SafetyLevel | undefined {
+  if (!experimentalEligible(req)) return undefined;
+  const token = parseCookies(req)[config.auth.cookieName];
+  const level = getSession(token)?.safetyLevel;
+  return (SAFETY_LEVELS as readonly string[]).includes(level ?? '') ? (level as SafetyLevel) : undefined;
 }
 
 /** True when this session opted into experimental features. */

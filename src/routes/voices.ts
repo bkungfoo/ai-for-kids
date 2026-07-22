@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { currentUser } from '../middleware/requireAuth.js';
-import { guardText } from '../safety/pipeline.js';
+import { currentUser, safetyLevelFor } from '../middleware/requireAuth.js';
+import { guardText, permittedAtLevel } from '../safety/pipeline.js';
 import { logger } from '../logger.js';
 import {
   cloneVoice,
@@ -86,7 +86,7 @@ voicesApiRouter.post(
 
     // The kid-typed voice name is free text — moderate it as input.
     const verdict = await guardText([name], 'input');
-    if (!verdict.allowed) {
+    if (!permittedAtLevel(verdict, safetyLevelFor(req))) {
       res.status(403).json({
         ok: false,
         blocked: true,
@@ -118,7 +118,7 @@ voicesApiRouter.post(
     if (!text) throw new ValidationError('Type some words to say first');
 
     const verdict = await guardText([text], 'input');
-    if (!verdict.allowed) {
+    if (!permittedAtLevel(verdict, safetyLevelFor(req))) {
       res.status(403).json({
         ok: false,
         blocked: true,

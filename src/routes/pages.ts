@@ -229,6 +229,20 @@ pagesRouter.get('/', (_req: Request, res: Response) => {
           box.checked = false;
           label.appendChild(box);
           label.appendChild(document.createTextNode('Allow experimental features'));
+          // Moderation strictness for this session (kept per-login; kids'
+          // accounts never see this dialog and always run the strictest).
+          const lvlLabel = document.createElement('label');
+          lvlLabel.style.cssText = 'display:block;margin-top:14px;font-size:13px;font-weight:700;color:#4a6c7c;';
+          lvlLabel.textContent = 'Safety level';
+          const lvl = document.createElement('select');
+          lvl.style.cssText = 'display:block;width:100%;margin-top:6px;padding:9px 11px;font-size:14px;' +
+            'font-family:inherit;border:1px solid #c9dbe4;border-radius:10px;background:#fff;color:#102a36;';
+          for (const v of ['BLOCK_LOW_AND_ABOVE', 'BLOCK_MEDIUM_AND_ABOVE', 'BLOCK_ONLY_HIGH', 'BLOCK_NONE']) {
+            const opt = document.createElement('option');
+            opt.value = v;
+            opt.textContent = v + (v === 'BLOCK_LOW_AND_ABOVE' ? ' (default)' : '');
+            lvl.appendChild(opt);
+          }
           const go = document.createElement('button');
           go.type = 'button';
           go.className = 'cta';
@@ -239,13 +253,15 @@ pagesRouter.get('/', (_req: Request, res: Response) => {
               await fetch('/v1/experimental', {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ enabled: box.checked }),
+                body: JSON.stringify({ enabled: box.checked, safetyLevel: lvl.value }),
               });
             } catch {}
             backdrop.remove();
           });
           modal.appendChild(h);
           modal.appendChild(label);
+          modal.appendChild(lvlLabel);
+          modal.appendChild(lvl);
           modal.appendChild(go);
           backdrop.appendChild(modal);
           document.body.appendChild(backdrop);
