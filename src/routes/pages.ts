@@ -261,12 +261,50 @@ pagesRouter.get('/images', (_req: Request, res: Response) => res.redirect('/book
 
 /** Friendly error text shared by the storybook pages' client scripts. */
 const CLIENT_HELPERS_JS = `
+  // Safety blocks (bad words / unsafe ideas) surface in a popup the child
+  // can't miss, instead of the status line below the book. Self-contained
+  // inline styles so every storybook page can show it, above any open dialog.
+  function showSafetyDialog(message) {
+    const old = document.getElementById('safety-dialog');
+    if (old) old.remove();
+    const backdrop = document.createElement('div');
+    backdrop.id = 'safety-dialog';
+    backdrop.style.cssText = 'position:fixed;inset:0;background:rgba(30,22,10,.55);' +
+      'z-index:120;display:flex;align-items:center;justify-content:center;padding:20px;';
+    const modal = document.createElement('div');
+    modal.style.cssText = 'background:#fdf9f0;border-radius:14px;width:min(92vw,420px);' +
+      'padding:22px 24px;box-shadow:0 24px 60px rgba(0,0,0,.45);text-align:center;';
+    const icon = document.createElement('div');
+    icon.style.cssText = 'font-size:40px;';
+    icon.textContent = '⚠️';
+    const h = document.createElement('h3');
+    h.style.cssText = 'margin:8px 0 10px;font-size:18px;color:#5a4632;';
+    h.textContent = 'Hold on a moment!';
+    const p = document.createElement('p');
+    p.style.cssText = 'margin:0 0 18px;font-size:15px;line-height:1.55;color:#3d2f1e;';
+    p.textContent = message; // moderator text — always plain text, never HTML
+    const ok = document.createElement('button');
+    ok.type = 'button';
+    ok.textContent = 'OK';
+    ok.style.cssText = 'padding:10px 34px;font-size:15px;font-weight:700;color:#fff;' +
+      'background:#2c6e8f;border:none;border-radius:10px;cursor:pointer;';
+    ok.addEventListener('click', () => backdrop.remove());
+    modal.appendChild(icon);
+    modal.appendChild(h);
+    modal.appendChild(p);
+    modal.appendChild(ok);
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+    ok.focus();
+  }
   function friendlyError(res, data) {
     if (data && data.code === 'credits_exhausted') {
       return { text: '🪫 ' + (data.error || 'The AI credits have run out — ask a grown-up to top up the account.'), cls: 'error' };
     }
     if (res.status === 403 && data && data.blocked) {
-      return { text: data.message || "Let's try a different idea — keep it friendly and safe!", cls: 'blocked' };
+      // A real safety block: the popup carries the warning; nothing below the book.
+      showSafetyDialog(data.message || "Let's try a different idea — keep it friendly and safe!");
+      return { text: '', cls: '' };
     }
     if (res.status === 401) return { text: 'Your session ended. <a href="/login">Sign in again</a>.', cls: 'error' };
     if (res.status === 409 && data && data.error) return { text: data.error, cls: 'blocked' };
