@@ -264,7 +264,23 @@ const CLIENT_HELPERS_JS = `
   // Safety blocks (bad words / unsafe ideas) surface in a popup the child
   // can't miss, instead of the status line below the book. Self-contained
   // inline styles so every storybook page can show it, above any open dialog.
-  function showSafetyDialog(message) {
+  // The moderator's category ids, in words a child understands.
+  const SAFETY_REASONS = {
+    violence: '🥊 Fighting or violence',
+    weapons: '⚔️ Weapons',
+    sexual: '🔞 Grown-up content',
+    self_harm: '🩹 Getting hurt',
+    harassment: '😠 Being unkind to someone',
+    hate: '💔 Mean or hateful words',
+    dangerous_acts: '⚡ Dangerous things to copy',
+    drugs: '🚭 Drugs, alcohol, or smoking',
+    pii: '🔒 Personal information',
+    profanity: '🤐 Bad words',
+    illegal: '🚫 Against the rules or the law',
+    age_inappropriate: '👻 Too scary or grown-up',
+    jailbreak: '🎭 Trying to trick the safety rules',
+  };
+  function showSafetyDialog(message, categories) {
     const old = document.getElementById('safety-dialog');
     if (old) old.remove();
     const backdrop = document.createElement('div');
@@ -281,8 +297,28 @@ const CLIENT_HELPERS_JS = `
     h.style.cssText = 'margin:8px 0 10px;font-size:18px;color:#5a4632;';
     h.textContent = 'Hold on a moment!';
     const p = document.createElement('p');
-    p.style.cssText = 'margin:0 0 18px;font-size:15px;line-height:1.55;color:#3d2f1e;';
+    p.style.cssText = 'margin:0 0 14px;font-size:15px;line-height:1.55;color:#3d2f1e;';
     p.textContent = message; // moderator text — always plain text, never HTML
+    // Why it was blocked: the moderator's categories, in kid words.
+    const reasons = (categories || [])
+      .map((c) => SAFETY_REASONS[c] || String(c).replace(/_/g, ' '))
+      .filter((v, i, a) => a.indexOf(v) === i);
+    let reasonBox = null;
+    if (reasons.length) {
+      reasonBox = document.createElement('div');
+      reasonBox.style.cssText = 'margin:0 0 18px;display:flex;flex-wrap:wrap;gap:6px;justify-content:center;';
+      const why = document.createElement('span');
+      why.style.cssText = 'font-size:13px;font-weight:800;color:#6b5d43;align-self:center;';
+      why.textContent = 'Why?';
+      reasonBox.appendChild(why);
+      for (const r of reasons) {
+        const chip = document.createElement('span');
+        chip.style.cssText = 'font-size:13px;font-weight:700;color:#8a5a00;background:#f6ecd2;' +
+          'border:1px solid #e0c98a;border-radius:999px;padding:4px 11px;';
+        chip.textContent = r;
+        reasonBox.appendChild(chip);
+      }
+    }
     const ok = document.createElement('button');
     ok.type = 'button';
     ok.textContent = 'OK';
@@ -292,6 +328,7 @@ const CLIENT_HELPERS_JS = `
     modal.appendChild(icon);
     modal.appendChild(h);
     modal.appendChild(p);
+    if (reasonBox) modal.appendChild(reasonBox);
     modal.appendChild(ok);
     backdrop.appendChild(modal);
     document.body.appendChild(backdrop);
@@ -302,8 +339,12 @@ const CLIENT_HELPERS_JS = `
       return { text: '🪫 ' + (data.error || 'The AI credits have run out — ask a grown-up to top up the account.'), cls: 'error' };
     }
     if (res.status === 403 && data && data.blocked) {
-      // A real safety block: the popup carries the warning; nothing below the book.
-      showSafetyDialog(data.message || "Let's try a different idea — keep it friendly and safe!");
+      // A real safety block: the popup carries the warning (and WHY it was
+      // blocked, from the moderator's categories); nothing below the book.
+      showSafetyDialog(
+        data.message || "Let's try a different idea — keep it friendly and safe!",
+        data.verdict && data.verdict.categories,
+      );
       return { text: '', cls: '' };
     }
     if (res.status === 401) return { text: 'Your session ended. <a href="/login">Sign in again</a>.', cls: 'error' };
