@@ -37,7 +37,7 @@ Allowing guidance:
 - When unsure between allowing benign creativity and blocking, lean toward ALLOW for low-stakes content, but ALWAYS block anything sexual, self-harm, weapons, drugs, or that exposes a child's personal information.
 
 Set severity to the highest applicable: none, low, medium, or high.
-List every category that applies (empty when allowed and clean).
+List every category that applies (empty when allowed and clean). Always pick the most specific listed category — for example, nudity or "naked" anything is sexual; crude toilet humor or swearing is profanity; scary-but-not-violent content is age_inappropriate. Never fall back to a vague or unlisted category.
 "reason" is a short internal note for moderators/logs (not shown to the child).
 "childMessage" is a warm, simple, non-scolding sentence a young child will understand, shown only when blocked (e.g. "Let's try a different idea — keep it friendly and fun!"). Leave childMessage empty when allowed.`;
 

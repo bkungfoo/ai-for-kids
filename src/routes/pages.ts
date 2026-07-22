@@ -279,6 +279,7 @@ const CLIENT_HELPERS_JS = `
     illegal: '🚫 Against the rules or the law',
     age_inappropriate: '👻 Too scary or grown-up',
     jailbreak: '🎭 Trying to trick the safety rules',
+    other: '🚧 Not right for kids',
   };
   function showSafetyDialog(message, categories) {
     const old = document.getElementById('safety-dialog');
