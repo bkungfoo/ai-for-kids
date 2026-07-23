@@ -190,7 +190,10 @@ export const MUSIC_BG_PURPLE =
  */
 export const VOICES_BG_CHAT =
   `<svg xmlns='http://www.w3.org/2000/svg' width='380' height='340' viewBox='0 0 380 340'>` +
-  `<rect width='380' height='340' fill='#fdfdfd'/>` +
+  `<rect width='380' height='340' fill='#ffffff'/>` +
+  // Whole scene at half opacity: 50% less contrast against the white base,
+  // so the figures sit back as a gentle wallpaper.
+  `<g opacity='.5'>` +
   // tilted cream backdrop band, like the reference art
   `<path d='M14 158 L 366 136 L 366 272 L 14 292 Z' fill='#faf1dc' opacity='.85'/>` +
   // ground shadows
@@ -276,4 +279,4 @@ export const VOICES_BG_CHAT =
   `<g fill='#c9d8ea' opacity='.9'>` +
   `<circle cx='196' cy='96' r='4'/><circle cx='208' cy='90' r='3'/><circle cx='218' cy='96' r='2.2'/>` +
   `<circle cx='30' cy='226' r='3'/><circle cx='352' cy='198' r='3'/>` +
-  `</g></svg>`;
+  `</g></g></svg>`;
