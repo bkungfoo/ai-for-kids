@@ -20,6 +20,13 @@ const VOICES_CSS = `<style>
      opaque cards on top. */
   body { background: #ffffff url("data:image/svg+xml,${encodeURIComponent(VOICES_BG_CHAT)}") repeat;
     background-size: 380px; }
+  /* The shell header defaults to white text (for its dark gradient); on this
+     light background, darken it so the back arrow + sign-out stay visible —
+     same pattern as the Music section. */
+  header { color: #35566b; }
+  .back, .signout { color: #35566b; }
+  .signout { border-color: rgba(53,86,107,.45); }
+  .signout:hover { background: rgba(53,86,107,.10); }
   .card { background: #ffffff; box-shadow: 0 18px 40px rgba(16,42,54,.30); }
   main { width: min(94vw, 860px); }
   .vtiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
