@@ -145,6 +145,7 @@ function voicesSharedJs(): string {
     if (res.status === 501) return { text: "The voice maker isn't set up yet. Ask a grown-up to add the key.", cls: 'error' };
     if (res.status === 403 && data && data.blocked) return { text: data.message || "Let's keep it friendly!", cls: 'blocked' };
     if (res.status === 422 && data && data.error) return { text: data.error, cls: 'blocked' };
+    if (res.status === 503 && data && data.error) return { text: data.error, cls: 'blocked' };
     return { text: (data && data.error) || 'Something went wrong — please try again!', cls: 'error' };
   }
   function setStatus(el, html, cls) {

@@ -101,7 +101,24 @@ voicesApiRouter.post(
       return;
     }
 
-    const elevenVoiceId = await cloneVoice(name, audio, mimeType);
+    let elevenVoiceId: string;
+    try {
+      elevenVoiceId = await cloneVoice(name, audio, mimeType);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      // The account's cloned-voice slots are full: a clear, kid-safe message
+      // (and a distinct 503) instead of a bare 500.
+      if (detail.includes('voice_limit_reached') || detail.includes('maximum amount of custom voices')) {
+        res.status(503).json({
+          ok: false,
+          error: 'The voice maker is full right now — a grown-up needs to remove some old voices. Try again later!',
+        });
+        return;
+      }
+      logger.error('voice clone failed', { error: detail });
+      res.status(502).json({ ok: false, error: 'The voice maker had trouble — please try again!' });
+      return;
+    }
     const voice = await createVoice({ name, owner: currentUser(req), elevenVoiceId });
     logger.info('voice cloned', { voiceId: voice.id, owner: voice.owner });
     res.json({ ok: true, voice: publicVoice(voice, req) });
