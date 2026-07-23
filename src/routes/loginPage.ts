@@ -1,8 +1,32 @@
-/** The login page HTML. Intentionally has NO sign-up button or link. */
-export function loginPage({ error = false }: { error?: boolean } = {}): string {
+/** The login page HTML, including the create-an-account form (behind a
+ * server-minted puzzle — see auth/captcha.ts). */
+export function loginPage({
+  error = false,
+  registerError,
+  challenge,
+}: {
+  error?: boolean;
+  registerError?: string;
+  challenge?: { id: string; question: string };
+} = {}): string {
   const errorBanner = error
     ? '<p class="error" role="alert">Sorry, that username or password didn\'t match. Try again.</p>'
     : '';
+  const REGISTER_ERRORS: Record<string, string> = {
+    puzzle: 'The puzzle answer wasn\'t right — give the new one a try!',
+    mismatch: 'The two passwords didn\'t match.',
+    invalid: 'Usernames are 3–20 letters, numbers, or underscores.',
+    weak: 'Passwords need at least 8 characters.',
+    taken: 'That username is already taken — pick another!',
+    name: 'Let\'s pick a friendlier username.',
+    full: 'No more room for new accounts — ask a grown-up.',
+    slow: 'Lots of tries just now — wait a bit and try again.',
+    again: 'Something went wrong — please try again.',
+  };
+  const registerBanner = registerError
+    ? `<p class="error" role="alert">${REGISTER_ERRORS[registerError] ?? REGISTER_ERRORS.again}</p>`
+    : '';
+  const showRegister = Boolean(registerError);
 
   return `<!doctype html>
 <html lang="en">
@@ -42,6 +66,11 @@ export function loginPage({ error = false }: { error?: boolean } = {}): string {
       margin: 0 0 4px; padding: 10px 12px; font-size: 13px;
       color: #8a1c1c; background: #fde8e8; border-radius: 9px;
     }
+    .swap { margin: 16px 0 0; text-align: center; font-size: 13.5px; color: #5a7785; }
+    .swap a { color: #2c6e8f; font-weight: 700; }
+    .puzzle { margin-top: 16px; padding: 12px 14px; background: #fdf6df;
+      border: 1px dashed #d9c37a; border-radius: 10px; }
+    .puzzle-q { display: block; font-size: 14px; font-weight: 600; color: #6d5518; }
   </style>
 </head>
 <body>
@@ -51,15 +80,52 @@ export function loginPage({ error = false }: { error?: boolean } = {}): string {
       <h1>Harbor House</h1>
       <p>Sign in to start creating</p>
     </div>
-    ${errorBanner}
-    <form method="post" action="/login" autocomplete="off">
-      <label for="username">Username</label>
-      <input id="username" name="username" type="text" required autofocus />
-      <label for="password">Password</label>
-      <input id="password" name="password" type="password" required />
-      <button type="submit">Sign in</button>
-    </form>
+    <div id="login-pane" ${showRegister ? 'hidden' : ''}>
+      ${errorBanner}
+      <form method="post" action="/login" autocomplete="off">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" required ${showRegister ? '' : 'autofocus'} />
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" required />
+        <button type="submit">Sign in</button>
+      </form>
+      <p class="swap">New here? <a href="#" id="show-register">Create an account</a></p>
+    </div>
+    <div id="register-pane" ${showRegister ? '' : 'hidden'}>
+      ${registerBanner}
+      <form method="post" action="/register" autocomplete="off">
+        <label for="r-username">Pick a username</label>
+        <input id="r-username" name="username" type="text" required minlength="3" maxlength="20"
+          pattern="[A-Za-z0-9_]+" title="Letters, numbers, and underscores" ${showRegister ? 'autofocus' : ''} />
+        <label for="r-password">Pick a password (8+ characters)</label>
+        <input id="r-password" name="password" type="password" required minlength="8" />
+        <label for="r-confirm">Type the password again</label>
+        <input id="r-confirm" name="confirm" type="password" required minlength="8" />
+        <div class="puzzle">
+          <span class="puzzle-q">${challenge?.question ?? ''}</span>
+          <input type="hidden" name="captchaId" value="${challenge?.id ?? ''}" />
+          <label for="r-captcha">Your answer</label>
+          <input id="r-captcha" name="captchaAnswer" type="number" inputmode="numeric" required />
+        </div>
+        <button type="submit">Create my account</button>
+      </form>
+      <p class="swap">Already have one? <a href="#" id="show-login">Sign in</a></p>
+    </div>
   </main>
+  <script>
+    document.getElementById('show-register').addEventListener('click', (e) => {
+      e.preventDefault();
+      document.getElementById('login-pane').hidden = true;
+      document.getElementById('register-pane').hidden = false;
+      document.getElementById('r-username').focus();
+    });
+    document.getElementById('show-login').addEventListener('click', (e) => {
+      e.preventDefault();
+      document.getElementById('register-pane').hidden = true;
+      document.getElementById('login-pane').hidden = false;
+      document.getElementById('username').focus();
+    });
+  </script>
 </body>
 </html>`;
 }
