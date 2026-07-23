@@ -200,6 +200,14 @@ function voicesSharedJs(): string {
     const input = document.createElement('input');
     input.maxLength = 300;
     input.placeholder = 'Type words for this voice to say…';
+    // Ready-to-play default: press Play right away, or click the box —
+    // the first click selects it all so typing replaces the whole line.
+    input.value = 'Hi! I am ' + v.name + ' and this is my amazing new voice. Nice to meet you!';
+    input.addEventListener('focus', () => {
+      if (input.dataset.touched) return;
+      input.dataset.touched = '1';
+      input.select();
+    });
     const play = document.createElement('button');
     play.type = 'button';
     play.className = 'cta';
