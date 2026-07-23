@@ -193,13 +193,13 @@ export const VOICES_BG_CHAT =
   `<rect width='380' height='340' fill='#ffffff'/>` +
   // Whole scene at half opacity: 50% less contrast against the white base,
   // so the figures sit back as a gentle wallpaper.
-  `<g opacity='.5'>` +
+  `<g opacity='.3'>` +
   // tilted cream backdrop band, like the reference art
-  `<path d='M14 158 L 366 136 L 366 272 L 14 292 Z' fill='#faf1dc' opacity='.85'/>` +
+  `<path d='M14 152 L 366 132 L 366 240 L 14 258 Z' fill='#faf1dc' opacity='.85'/>` +
   // ground shadows
   `<g fill='#e3ecf5' opacity='.8'>` +
-  `<ellipse cx='102' cy='306' rx='72' ry='9'/>` +
-  `<ellipse cx='282' cy='306' rx='72' ry='9'/>` +
+  `<ellipse cx='102' cy='262' rx='64' ry='8'/>` +
+  `<ellipse cx='282' cy='268' rx='64' ry='8'/>` +
   `</g>` +
   // --- speech bubbles -------------------------------------------------------
   `<g opacity='.92'>` +
@@ -222,10 +222,10 @@ export const VOICES_BG_CHAT =
   `<path d='M54 168 L 40 186' stroke='#8a5a3b' stroke-width='5.5' stroke-linecap='round'/>` +
   `<path d='M70 168 L 82 156' stroke='#8a5a3b' stroke-width='5.5' stroke-linecap='round'/>` +
   `<rect x='51' y='195' width='22' height='17' rx='4' fill='#7ba7d9'/>` +
-  `<path d='M57 212 L 57 292' stroke='#8a5a3b' stroke-width='6.5' stroke-linecap='round'/>` +
-  `<path d='M67 212 L 67 292' stroke='#8a5a3b' stroke-width='6.5' stroke-linecap='round'/>` +
-  `<rect x='49' y='292' width='17' height='8' rx='4' fill='#c94f43'/>` +
-  `<rect x='61' y='292' width='17' height='8' rx='4' fill='#c94f43'/>` +
+  `<path d='M57 212 L 57 252' stroke='#8a5a3b' stroke-width='6.5' stroke-linecap='round'/>` +
+  `<path d='M67 212 L 67 252' stroke='#8a5a3b' stroke-width='6.5' stroke-linecap='round'/>` +
+  `<rect x='49' y='252' width='17' height='8' rx='4' fill='#c94f43'/>` +
+  `<rect x='61' y='252' width='17' height='8' rx='4' fill='#c94f43'/>` +
   `</g>` +
   // man: orange shirt, gray trousers, pointing toward her
   `<g>` +
@@ -237,10 +237,10 @@ export const VOICES_BG_CHAT =
   `<circle cx='103' cy='177' r='4' fill='#e8b48f'/>` +
   `<path d='M148 168 L 158 184' stroke='#e8703a' stroke-width='6.5' stroke-linecap='round'/>` +
   `<circle cx='159' cy='187' r='4' fill='#e8b48f'/>` +
-  `<path d='M131 197 L 131 292' stroke='#9aa3ad' stroke-width='9' stroke-linecap='round'/>` +
-  `<path d='M145 197 L 145 292' stroke='#9aa3ad' stroke-width='9' stroke-linecap='round'/>` +
-  `<rect x='123' y='292' width='17' height='8' rx='4' fill='#55524e'/>` +
-  `<rect x='138' y='292' width='17' height='8' rx='4' fill='#55524e'/>` +
+  `<path d='M131 197 L 131 244' stroke='#9aa3ad' stroke-width='9' stroke-linecap='round'/>` +
+  `<path d='M145 197 L 145 244' stroke='#9aa3ad' stroke-width='9' stroke-linecap='round'/>` +
+  `<rect x='123' y='244' width='17' height='8' rx='4' fill='#55524e'/>` +
+  `<rect x='138' y='244' width='17' height='8' rx='4' fill='#55524e'/>` +
   `</g>` +
   // --- right pair -----------------------------------------------------------
   // man: green jacket over white shirt, dark trousers
@@ -255,10 +255,10 @@ export const VOICES_BG_CHAT =
   `<circle cx='220' cy='185' r='4' fill='#b97a4e'/>` +
   `<path d='M254 166 L 264 152' stroke='#6fb597' stroke-width='6.5' stroke-linecap='round'/>` +
   `<circle cx='266' cy='149' r='4' fill='#b97a4e'/>` +
-  `<path d='M238 196 L 238 292' stroke='#3d4652' stroke-width='8.5' stroke-linecap='round'/>` +
-  `<path d='M251 196 L 251 292' stroke='#3d4652' stroke-width='8.5' stroke-linecap='round'/>` +
-  `<rect x='230' y='292' width='17' height='8' rx='4' fill='#2b2320'/>` +
-  `<rect x='244' y='292' width='17' height='8' rx='4' fill='#2b2320'/>` +
+  `<path d='M238 196 L 238 244' stroke='#3d4652' stroke-width='8.5' stroke-linecap='round'/>` +
+  `<path d='M251 196 L 251 244' stroke='#3d4652' stroke-width='8.5' stroke-linecap='round'/>` +
+  `<rect x='230' y='244' width='17' height='8' rx='4' fill='#2b2320'/>` +
+  `<rect x='244' y='244' width='17' height='8' rx='4' fill='#2b2320'/>` +
   `</g>` +
   // woman: long dark-blue hair, tan dress, thumbs-up
   `<g>` +
@@ -270,10 +270,10 @@ export const VOICES_BG_CHAT =
   `<path d='M298 168 L 286 156' stroke='#ecc4a2' stroke-width='5.5' stroke-linecap='round'/>` +
   `<circle cx='284' cy='153' r='4.5' fill='#ecc4a2'/>` +
   `<path d='M314 170 L 324 184' stroke='#ecc4a2' stroke-width='5.5' stroke-linecap='round'/>` +
-  `<path d='M300 224 L 300 292' stroke='#ecc4a2' stroke-width='6' stroke-linecap='round'/>` +
-  `<path d='M312 224 L 312 292' stroke='#ecc4a2' stroke-width='6' stroke-linecap='round'/>` +
-  `<rect x='292' y='292' width='16' height='8' rx='4' fill='#6d4a2f'/>` +
-  `<rect x='305' y='292' width='16' height='8' rx='4' fill='#6d4a2f'/>` +
+  `<path d='M300 224 L 300 258' stroke='#ecc4a2' stroke-width='6' stroke-linecap='round'/>` +
+  `<path d='M312 224 L 312 258' stroke='#ecc4a2' stroke-width='6' stroke-linecap='round'/>` +
+  `<rect x='292' y='258' width='16' height='8' rx='4' fill='#6d4a2f'/>` +
+  `<rect x='305' y='258' width='16' height='8' rx='4' fill='#6d4a2f'/>` +
   `</g>` +
   // floating chat dots
   `<g fill='#c9d8ea' opacity='.9'>` +
