@@ -56,6 +56,12 @@ const VOICES_CSS = `<style>
     font-size: 16px; line-height: 1.65; color: #4a3d20; }
   .readprompt .rp-label { display: block; font-family: system-ui, sans-serif; font-size: 12px;
     font-weight: 800; color: #8a6d1f; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+  .rp-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 2px 0 10px; }
+  .rp-tab { font-family: system-ui, sans-serif; font-size: 13px; font-weight: 700;
+    color: #6d5518; background: #fff; border: 2px solid #e0c98a; border-radius: 999px;
+    padding: 6px 12px; cursor: pointer; }
+  .rp-tab:hover { border-color: #c9a63f; }
+  .rp-tab.on { background: #f7e6b0; border-color: #c9a63f; }
   .status { margin-top: 12px; font-size: 14px; min-height: 20px; }
   .status.error { color: #8a1c1c; }
   .status.blocked { color: #8a5a00; }
@@ -87,18 +93,42 @@ const VOICES_CSS = `<style>
 </style>`;
 
 /**
- * The optional read-aloud passage: friendly, child-safe, and deliberately
+ * The optional read-aloud passages: friendly, child-safe, and deliberately
  * packed with varied syllables — long/short vowels, diphthongs, th/ch/sh/wh,
  * buzzes, plosives, blends and counting — so the clone hears a wide sweep of
- * the kid's speech sounds in ~20 seconds.
+ * the kid's speech sounds. The kid picks whichever sounds most fun.
  */
-const READING_PROMPT =
-  'Hello, hello! This is my very own voice. The quick brown fox jumps over the lazy dog, ' +
-  'while seven silly zebras zoom past purple mountains. I love crunchy apples, fluffy clouds, ' +
-  'and jolly jumping frogs. Whales whistle, dragons giggle, and tiny turtles tiptoe through ' +
-  'the garden. Let’s count together: one, two, three, four, five — hooray! Yesterday I saw a ' +
-  'shiny rainbow after the rain. Thunder rumbles, bees buzz, and choo-choo goes the train. ' +
-  'Splish-splash go my boots in a puddle, and that is the end — thank you for listening!';
+const READING_PROMPTS = [
+  {
+    id: 'hello',
+    label: '👋 My own voice',
+    text:
+      'Hello, hello! This is my very own voice. The quick brown fox jumps over the lazy dog, ' +
+      'while seven silly zebras zoom past purple mountains. I love crunchy apples, fluffy clouds, ' +
+      'and jolly jumping frogs. Whales whistle, dragons giggle, and tiny turtles tiptoe through ' +
+      'the garden. Let’s count together: one, two, three, four, five — hooray! Yesterday I saw a ' +
+      'shiny rainbow after the rain. Thunder rumbles, bees buzz, and choo-choo goes the train. ' +
+      'Splish-splash go my boots in a puddle, and that is the end — thank you for listening!',
+  },
+  {
+    id: 'space',
+    label: '🚀 Space trip',
+    text:
+      'Three, two, one — blast off! My shiny rocket zooms past the moon while sparkling stars ' +
+      'twinkle and glow. Hello, friendly aliens! Do you munch cheese, chew jelly, or slurp fizzy ' +
+      'juice? Whoosh goes a comet, boom goes the thunder-drum, and my puppy barks hooray. Quick, ' +
+      'jump over the wobbly space bridge — splish, splash — we made it home in time for supper!',
+  },
+  {
+    id: 'jungle',
+    label: '🦁 Jungle picnic',
+    text:
+      'Welcome to my jungle picnic! The cheeky monkeys giggle, the shy giraffe nibbles green ' +
+      'leaves, and a roaring lion sings a silly song. Yum, yum — we share peaches, pretzels, and ' +
+      'blueberry pie. Can you hop like a frog? Boing, boing! Can you slither like a snake? ' +
+      'Sss! Then we drum on buckets — rat-a-tat-tat — and wave goodbye until tomorrow.',
+  },
+];
 
 /** Shared client helpers (status line + friendly errors + audio playback). */
 function voicesSharedJs(): string {
@@ -271,8 +301,14 @@ voicePagesRouter.get('/voice/new', (_req: Request, res: Response) => {
         <audio id="preview" controls style="display:none; width:100%; margin-top:10px;"></audio>
 
         <div class="readprompt" id="readprompt">
-          <span class="rp-label">Need something to say? Read this out loud!</span>
-          ${READING_PROMPT}
+          <span class="rp-label">Need something to say? Pick a story and read it out loud!</span>
+          <div class="rp-tabs" id="rp-tabs">
+            ${READING_PROMPTS.map(
+              (p, i) =>
+                `<button type="button" class="rp-tab${i === 0 ? ' on' : ''}" data-rp="${p.id}">${p.label}</button>`,
+            ).join('')}
+          </div>
+          <div id="rp-text">${READING_PROMPTS[0]!.text}</div>
         </div>
 
         <div class="recrow">
@@ -308,6 +344,14 @@ function makerJs(): string {
   return `
   (() => {
     const MIN_SECONDS = 15;
+    // Reading-prompt picker: swap the passage when a story chip is chosen.
+    const RP = ${JSON.stringify(Object.fromEntries(READING_PROMPTS.map((p) => [p.id, p.text])))};
+    document.getElementById('rp-tabs').addEventListener('click', (e) => {
+      const tab = e.target.closest('.rp-tab');
+      if (!tab) return;
+      document.querySelectorAll('.rp-tab').forEach((t) => t.classList.toggle('on', t === tab));
+      document.getElementById('rp-text').textContent = RP[tab.dataset.rp] || '';
+    });
     const MAX_SECONDS = 60;
     const statusEl = document.getElementById('status');
     const recbtn = document.getElementById('recbtn');
