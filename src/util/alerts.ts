@@ -36,18 +36,28 @@ export function sendOperatorAlert(key: string, subject: string, body: string): v
 }
 
 async function deliver(subject: string, body: string): Promise<void> {
-  const { email, smtp } = config.alerts;
+  const { email } = config.alerts;
   if (!email) return;
   const text =
     `${body}\n\n— Harbor House gateway (${new Date().toISOString()})\n` +
     'This alert is rate-limited to at most one email per hour per issue.';
+  await sendEmail(email, subject, text);
+}
+
+/**
+ * General one-shot email (used by operator alerts AND the public-universe
+ * invite flow). SMTP relay when configured, else the local sendmail binary.
+ * Throws on failure — callers decide whether that matters.
+ */
+export async function sendEmail(to: string, subject: string, body: string): Promise<void> {
+  const { smtp } = config.alerts;
   if (smtp.host && smtp.user && smtp.pass) {
-    await sendViaSmtp(email, subject, text);
-    logger.info('operator alert email sent via SMTP', { to: email });
+    await sendViaSmtp(to, subject, body);
+    logger.info('email sent via SMTP', { to, subject });
     return;
   }
-  await sendViaSendmail(email, subject, text);
-  logger.info('operator alert email handed to sendmail', { to: email });
+  await sendViaSendmail(to, subject, body);
+  logger.info('email handed to sendmail', { to, subject });
 }
 
 function sendViaSendmail(to: string, subject: string, body: string): Promise<void> {

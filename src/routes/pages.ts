@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { config } from '../config.js';
-import { requirePageAuth } from '../middleware/requireAuth.js';
+import { requirePageAuth, currentUniverse } from '../middleware/requireAuth.js';
 import { availableEngines, ENGINE_NAMES, illustratorName } from '../providers/imageProvider.js';
 import { MUSIC_BG_BRIGHT, VOICES_BG_CHAT } from './wallpapers.js';
 
@@ -149,8 +149,11 @@ export function shell(opts: {
 }
 
 // --- Landing hub: one button per feature -------------------------------------
-pagesRouter.get('/', (_req: Request, res: Response) => {
-  const tiles = FEATURES.map(
+pagesRouter.get('/', (req: Request, res: Response) => {
+  // Public-universe accounts are storybooks-only: one tile, no hints of more.
+  const features =
+    currentUniverse(req) === 'public' ? FEATURES.filter((f) => f.href === '/books') : FEATURES;
+  const tiles = features.map(
     (f) => `
     <a class="tile${f.ready ? '' : ' soon'}${f.href === '/books' ? ' storybooks' : ''}${f.href === '/music' ? ' musictile' : ''}${f.href === '/voice' ? ' voicestile' : ''}" href="${f.href}">
       <span class="tile-icon" aria-hidden="true">${f.icon}</span>
@@ -1109,6 +1112,7 @@ function readerClientJs(): string {
   // default: no music buttons render and attached music stays silent, so the
   // feature is invisible unless the session opted in at login.
   let expFeatures = false;
+  let universe = 'harborhouse'; // public-universe readers get the default narrator only
   // Spread 0 = cover; spreads 1..N = story pages; spread N+1 = "add a page"
   // (the add spread disappears once the book has a "The End" page).
   let spread = 0;
@@ -1882,7 +1886,7 @@ function readerClientJs(): string {
         // Library books: anyone signed in can take an editable copy home.
         book.status === 'published' ? cloneBookControls() : null,
         // Whole-book narrator picker: above the music buttons, creator only.
-        canEdit && book.status !== 'published' ? narratorVoiceControls() : null,
+        universe !== 'public' && canEdit && book.status !== 'published' ? narratorVoiceControls() : null,
         editable() ? coverRegenControls() : null,
         expFeatures && editable() ? musicControls('cover', null) : null,
       ], 'cover-actions'));
@@ -3580,6 +3584,7 @@ function readerClientJs(): string {
         const er = await fetch('/v1/experimental');
         const ed = await er.json().catch(() => ({}));
         expFeatures = !!(er.ok && ed.ok && ed.enabled);
+        if (er.ok && ed.ok && ed.universe) universe = ed.universe;
       } catch {}
       // Music generation lives on the server: restore any job still composing
       // (or waiting for review) so a reload doesn't lose the page's state.

@@ -76,7 +76,11 @@ function parseAccounts(): Account[] {
 
 const accounts = parseAccounts();
 
+// External URL for links placed in emails (invite approvals).
+const publicBaseUrl = str('PUBLIC_BASE_URL', 'https://harbor-house.brianfoo.ai');
+
 export const config = {
+  publicBaseUrl,
   port: int('PORT', 8080),
   // Interface to bind. 0.0.0.0 exposes the server on all interfaces (external
   // IP included) — fine for testing, but serve behind HTTPS for real use.

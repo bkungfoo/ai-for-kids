@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import { requirePageAuth } from '../middleware/requireAuth.js';
+import { currentUniverse, requirePageAuth } from '../middleware/requireAuth.js';
 import { shell } from './pages.js';
 import { VOICES_BG_CHAT } from './wallpapers.js';
 
@@ -14,6 +14,14 @@ export const voicePagesRouter = Router();
 for (const path of ['/voice', '/voice/new', '/voice/mine', '/voice/library']) {
   voicePagesRouter.get(path, requirePageAuth);
 }
+// Public-universe accounts are storybooks-only: bounce them home.
+voicePagesRouter.use('/voice', (req, res, next) => {
+  if (currentUniverse(req) === 'public') {
+    res.redirect('/');
+    return;
+  }
+  next();
+});
 
 const VOICES_CSS = `<style>
   /* People-chatting wallpaper behind every Voices page; content stays in

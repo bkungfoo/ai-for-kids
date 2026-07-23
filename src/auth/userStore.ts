@@ -10,11 +10,17 @@ import { config } from '../config.js';
  * registrations are rare and the file is tiny.
  */
 
+/** 'harborhouse' = the original family universe (env accounts + legacy
+ * registrations); 'public' = token-invited outside users, fully isolated. */
+export type Universe = 'harborhouse' | 'public';
+
 interface StoredUser {
   username: string;
   /** hex(scrypt(password, salt)) */
   passwordHash: string;
   salt: string;
+  /** Absent on legacy records — they are harborhouse. */
+  universe?: Universe;
   createdAt: string;
 }
 
@@ -57,7 +63,11 @@ export function usernameTaken(username: string): boolean {
  * Create an account. Returns null on success or a machine-readable error id
  * ('invalid' | 'weak' | 'taken' | 'full') the login page maps to friendly text.
  */
-export function registerUser(username: string, password: string): string | null {
+export function registerUser(
+  username: string,
+  password: string,
+  universe: Universe = 'harborhouse',
+): string | null {
   if (!USERNAME_RE.test(username)) return 'invalid';
   if (password.length < 8 || password.length > 100) return 'weak';
   if (usernameTaken(username)) return 'taken';
@@ -68,6 +78,7 @@ export function registerUser(username: string, password: string): string | null 
     username,
     passwordHash: hash(password, salt).toString('hex'),
     salt,
+    universe,
     createdAt: new Date().toISOString(),
   });
   persist(users);
@@ -97,4 +108,14 @@ export function canonicalAccount(username: unknown): string | null {
   if (env) return env.username;
   const reg = load().find((u) => u.username.toLowerCase() === lower);
   return reg ? reg.username : null;
+}
+
+/** Which universe an account lives in. Env accounts and legacy registrations
+ * are harborhouse; unknown usernames return undefined. */
+export function accountUniverse(username: unknown): Universe | undefined {
+  if (typeof username !== 'string') return undefined;
+  const lower = username.toLowerCase();
+  if (config.auth.accounts.some((a) => a.username.toLowerCase() === lower)) return 'harborhouse';
+  const reg = load().find((u) => u.username.toLowerCase() === lower);
+  return reg ? (reg.universe ?? 'harborhouse') : undefined;
 }

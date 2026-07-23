@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { experimentalState, requireApiAuth, safetyLevelFor, setExperimental } from '../middleware/requireAuth.js';
+import { currentUniverse, experimentalState, requireApiAuth, requireHarborUniverse, safetyLevelFor, setExperimental } from '../middleware/requireAuth.js';
 import { claudeCodeProvider } from '../providers/claudeCode.js';
 import { elevenLabsProvider } from '../providers/elevenlabs.js';
 import { geminiProvider } from '../providers/gemini.js';
@@ -47,7 +47,7 @@ router.use('/v1', requireApiAuth);
 // features (storybook background music) for this login; everyone else is
 // always off and never sees the dialog. GET feeds the client bootstrap.
 router.get('/v1/experimental', (req: Request, res: Response) => {
-  res.json({ ok: true, ...experimentalState(req) });
+  res.json({ ok: true, ...experimentalState(req), universe: currentUniverse(req) ?? 'harborhouse' });
 });
 router.post('/v1/experimental', (req: Request, res: Response) => {
   const body = (req.body ?? {}) as { enabled?: unknown; safetyLevel?: unknown };
@@ -61,14 +61,17 @@ router.use('/v1/books', booksApiRouter);
 router.use('/v1/library', libraryApiRouter);
 
 // --- Music maker: AIMusicAPI song generation + My music / library -------------
-router.use('/v1/music', musicApiRouter);
+// Harbor House universe only — public-universe accounts are storybooks-only.
+router.use('/v1/music', requireHarborUniverse, musicApiRouter);
 
 // --- Voices: kid voice cloning (record -> clone -> speak) ---------------------
-router.use('/v1/voices', voicesApiRouter);
+// Harbor House universe only.
+router.use('/v1/voices', requireHarborUniverse, voicesApiRouter);
 
 // --- Voice: ElevenLabs ------------------------------------------------------
 router.post(
   '/v1/voice',
+  requireHarborUniverse,
   asyncHandler(async (req, res) => {
     const reqBody = {
       text: requireString(req.body, 'text'),
@@ -96,6 +99,7 @@ router.post(
 // --- Vibe coding: Claude Code -----------------------------------------------
 router.post(
   '/v1/code',
+  requireHarborUniverse,
   asyncHandler(async (req, res) => {
     const reqBody = { prompt: requireString(req.body, 'prompt', { maxLength: 8000 }) };
     const outcome = await runGuardedGeneration(claudeCodeProvider, reqBody, { safetyLevel: safetyLevelFor(req) });

@@ -61,7 +61,7 @@ import { generateMubertTrack, mubertConfigured } from '../providers/mubert.js';
 import { aceStepConfigured, generateAceStepTrack } from '../providers/aceStep.js';
 import { speakWithVoice } from '../providers/elevenVoices.js';
 import { getVoice } from '../voices/voiceStore.js';
-import { canonicalAccount } from '../auth/userStore.js';
+import { accountUniverse, canonicalAccount } from '../auth/userStore.js';
 import { optionalString, requireString, ValidationError } from './validate.js';
 
 /**
@@ -238,6 +238,20 @@ function firstImage(result: unknown): BookImage | null {
  * "My storybooks". Returns undefined otherwise, so callers respond 404 and
  * never reveal that another user's book exists (let alone let it be edited).
  */
+/** Universe of a book (via its owner); legacy ownerless books are harborhouse. */
+function bookUniverse(book: Book): string {
+  return accountUniverse(book.owner) ?? 'harborhouse';
+}
+
+/** May READ: the owner, a shared editor, or — for PUBLISHED books — any
+ * signed-in account in the SAME universe. The public and Harbor House
+ * universes never see each other's books. */
+function canReadBook(book: Book, user: string | undefined): boolean {
+  if (!user) return false;
+  if (book.owner === user || (book.editors ?? []).includes(user)) return true;
+  return book.status === 'published' && bookUniverse(book) === (accountUniverse(user) ?? 'harborhouse');
+}
+
 /** May EDIT: the owner or any account the owner shared the book with. */
 async function getOwnedBook(id: string, user: string | undefined): Promise<Book | undefined> {
   if (!user) return undefined;
@@ -403,7 +417,7 @@ booksApiRouter.get(
     const user = currentUser(req);
     const isOwner = !!book && book.owner === user;
     const isEditor = !!book && !!user && (book.editors ?? []).includes(user);
-    if (!book || (!isOwner && !isEditor && book.status !== 'published')) {
+    if (!book || !canReadBook(book, user)) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
@@ -757,7 +771,7 @@ booksApiRouter.post(
   asyncHandler(async (req, res) => {
     const bookId = req.params.id ?? '';
     const book = await getBook(bookId);
-    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+    if (!book || !canReadBook(book, currentUser(req))) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
@@ -790,7 +804,7 @@ booksApiRouter.post(
     // audio of already-moderated words, not an edit, so published books allow
     // it too (the audio is cached into the book so it is generated only once).
     const book = await getBook(bookId);
-    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+    if (!book || !canReadBook(book, currentUser(req))) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
@@ -826,7 +840,7 @@ booksApiRouter.get(
   '/:id/narration-status',
   asyncHandler(async (req, res) => {
     const book = await getBook(req.params.id ?? '');
-    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+    if (!book || !canReadBook(book, currentUser(req))) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
@@ -857,7 +871,7 @@ booksApiRouter.post(
   asyncHandler(async (req, res) => {
     const bookId = req.params.id ?? '';
     const book = await getBook(bookId);
-    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+    if (!book || !canReadBook(book, currentUser(req))) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
@@ -895,7 +909,7 @@ booksApiRouter.post(
   '/:id/clone',
   asyncHandler(async (req, res) => {
     const src = await getBook(req.params.id ?? '');
-    if (!src || (src.owner !== currentUser(req) && src.status !== 'published')) {
+    if (!src || !canReadBook(src, currentUser(req))) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
@@ -942,6 +956,10 @@ booksApiRouter.post(
       res.status(409).json({ ok: false, error: 'That account already owns this book!' });
       return;
     }
+    if ((accountUniverse(target) ?? 'harborhouse') !== bookUniverse(book)) {
+      res.status(404).json({ ok: false, error: "There's no account with that name — check the spelling!" });
+      return;
+    }
     const updated = await addEditor(bookId, target);
     logger.info('book shared', { bookId, with: target, by: book.owner });
     res.json({ ok: true, book: updated });
@@ -981,6 +999,10 @@ booksApiRouter.post(
       res.status(409).json({ ok: false, error: 'That account already owns this book!' });
       return;
     }
+    if ((accountUniverse(target) ?? 'harborhouse') !== bookUniverse(book)) {
+      res.status(404).json({ ok: false, error: "There's no account with that name — check the spelling!" });
+      return;
+    }
     const updated = await transferBook(bookId, target);
     logger.info('book ownership transferred', { bookId, from: book.owner, to: target });
     res.json({ ok: true, book: updated });
@@ -995,6 +1017,10 @@ booksApiRouter.post(
 booksApiRouter.post(
   '/:id/narrator-voice',
   asyncHandler(async (req, res) => {
+    if ((accountUniverse(currentUser(req)) ?? 'harborhouse') === 'public') {
+      res.status(404).json({ ok: false, error: 'Not found' });
+      return;
+    }
     const bookId = req.params.id ?? '';
     const book = await getOwnedBook(bookId, currentUser(req));
     if (!book) {
@@ -1706,7 +1732,7 @@ booksApiRouter.get(
     const bookId = req.params.id ?? '';
     const index = Number.parseInt(req.params.index ?? '', 10);
     const book = await getBook(bookId);
-    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+    if (!book || !canReadBook(book, currentUser(req))) {
       res.status(404).json({ ok: false, error: 'Not found' });
       return;
     }
@@ -1867,7 +1893,7 @@ booksApiRouter.get(
   asyncHandler(async (req, res) => {
     const bookId = req.params.id ?? '';
     const book = await getBook(bookId);
-    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+    if (!book || !canReadBook(book, currentUser(req))) {
       res.status(404).json({ ok: false, error: 'Not found' });
       return;
     }
@@ -2156,8 +2182,14 @@ export const libraryApiRouter = Router();
 
 libraryApiRouter.get(
   '/',
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
     const books = await listBooks();
-    res.json({ ok: true, books: books.filter((b) => b.status === 'published').map(summarize) });
+    const universe = accountUniverse(currentUser(req)) ?? 'harborhouse';
+    res.json({
+      ok: true,
+      books: books
+        .filter((b) => b.status === 'published' && bookUniverse(b) === universe)
+        .map(summarize),
+    });
   }),
 );
