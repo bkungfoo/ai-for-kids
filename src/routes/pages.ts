@@ -868,6 +868,9 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .cta.cancel { background: #8a8a8a; }
         .cta.cancel:hover { background: #737373; }
         .cta.cancel:disabled { background: #bdbdbd; }
+        .cta.share { background: #2f8f6f; }
+        .cta.share:hover { background: #26775c; }
+        .cta.share:disabled { background: #9dc7b7; }
         .pubnote { text-align: center; color: #5a4632; font-size: 13px; font-weight: 600; margin-top: 12px; }
         /* Repaint-the-picture controls under a page's image. The toggle pill
            is centered like every other button row; an opened form goes back
@@ -1880,8 +1883,6 @@ function readerClientJs(): string {
         book.status === 'published' ? cloneBookControls() : null,
         // Whole-book narrator picker: above the music buttons, creator only.
         canEdit && book.status !== 'published' ? narratorVoiceControls() : null,
-        // Sharing & ownership: strictly the owner's business.
-        mine && book.status !== 'published' ? shareControls() : null,
         editable() ? coverRegenControls() : null,
         expFeatures && editable() ? musicControls('cover', null) : null,
       ], 'cover-actions'));
@@ -2587,16 +2588,14 @@ function readerClientJs(): string {
   }
 
   // --- Sharing & ownership -----------------------------------------------------
-  function shareControls() {
-    const wrap = document.createElement('div');
-    wrap.className = 'readrow';
+  // An action-bar button (next to Save / Publish), owner-only, drafts only.
+  function makeShareButton() {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'readbtn';
-    btn.textContent = '👥 Sharing & owner';
+    btn.className = 'cta share';
+    btn.textContent = '🤝 Share with a friend';
     btn.addEventListener('click', openShareDialog);
-    wrap.appendChild(btn);
-    return wrap;
+    return btn;
   }
 
   function openShareDialog() {
@@ -3414,6 +3413,7 @@ function readerClientJs(): string {
       });
       actions.appendChild(edit);
       if (mine) actions.appendChild(makePublishButton());
+      if (mine) actions.appendChild(makeShareButton());
       return;
     }
 
@@ -3428,6 +3428,7 @@ function readerClientJs(): string {
     });
     actions.appendChild(save);
     if (mine) actions.appendChild(makePublishButton());
+    if (mine) actions.appendChild(makeShareButton());
 
     // Cancel is only offered when a snapshot exists to go back to (i.e. the
     // book was reopened via "Edit this book" — not during first creation).
