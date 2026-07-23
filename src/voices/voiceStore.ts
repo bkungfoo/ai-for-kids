@@ -146,3 +146,11 @@ export async function deleteVoice(id: string): Promise<boolean> {
   }
   return true;
 }
+
+/** True when another stored voice still points at the same ElevenLabs voice —
+ * cloned library voices share the remote model, so the remote slot must only
+ * be released when the LAST reference goes. */
+export async function elevenIdShared(excludeId: string, elevenVoiceId: string): Promise<boolean> {
+  const { voices } = await listVoices();
+  return voices.some((v) => v.id !== excludeId && v.elevenVoiceId === elevenVoiceId);
+}

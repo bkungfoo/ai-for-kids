@@ -202,6 +202,28 @@ function voicesSharedJs(): string {
     say.appendChild(input);
     say.appendChild(play);
     row.appendChild(say);
+    if (!v.mine) {
+      const actions = document.createElement('div');
+      actions.className = 'v-actions';
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'linkbtn';
+      copy.textContent = '📋 Save a copy to my voices';
+      copy.addEventListener('click', async () => {
+        copy.disabled = true;
+        try {
+          const res = await fetch('/v1/voices/' + v.id + '/clone', { method: 'POST' });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok) setStatus(statusEl, '📋 Saved! Find it in <a href="/voice/mine">My voices</a>.');
+          else { const f = friendlyError(res, data); setStatus(statusEl, f.text, f.cls); copy.disabled = false; }
+        } catch {
+          setStatus(statusEl, 'Could not reach the server. Check your connection and try again.', 'error');
+          copy.disabled = false;
+        }
+      });
+      actions.appendChild(copy);
+      row.appendChild(actions);
+    }
     if (isMine) {
       const actions = document.createElement('div');
       actions.className = 'v-actions';

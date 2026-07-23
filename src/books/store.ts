@@ -118,6 +118,9 @@ export interface Book {
   narratorVoiceId?: string | null;
   /** Display name of that voice, denormalized for the reader UI. */
   narratorVoiceName?: string | null;
+  /** Accounts the owner shared EDIT permission with (never the owner itself).
+   * Editors can change content but not publish, delete, share, or transfer. */
+  editors?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -251,6 +254,87 @@ export async function updateNarratorVoice(
     delete book.narratorVoiceId;
     delete book.narratorVoiceName;
   }
+  book.updatedAt = new Date().toISOString();
+  await save(book);
+  return book;
+}
+
+/**
+ * Deep-copy a book onto another account's shelf as an editable draft (the
+ * "make my own copy" path from the library). Background-music mp3s are
+ * duplicated to fresh ids so deleting either book never breaks the other's
+ * audio; inline assets (images, narration) copy with the JSON.
+ */
+export async function cloneBook(id: string, owner: string | undefined): Promise<Book | undefined> {
+  const src = await getBook(id);
+  if (!src) return undefined;
+  const copy: Book = structuredClone(src);
+  copy.id = randomUUID();
+  copy.owner = owner;
+  copy.status = 'draft';
+  copy.createdAt = new Date().toISOString();
+  copy.updatedAt = copy.createdAt;
+
+  const holders: Array<{ music?: PageMusic | null }> = [copy, ...copy.pages] as Array<{
+    music?: PageMusic | null;
+  }>;
+  // The cover's music lives under a different key; normalize it into the loop.
+  const coverHolder = { music: copy.coverMusic ?? null };
+  holders[0] = coverHolder;
+  for (const holder of holders) {
+    if (!holder.music) continue;
+    try {
+      const file = pageMusicFile(holder.music.id);
+      if (!file) throw new Error('bad music id');
+      const bytes = await readFile(file);
+      holder.music = { ...holder.music, id: await savePageMusicAudio(bytes) };
+    } catch {
+      holder.music = null; // source mp3 missing — drop the music, keep the book
+    }
+  }
+  if (coverHolder.music) copy.coverMusic = coverHolder.music;
+  else delete copy.coverMusic;
+  copy.pages.forEach((page, i) => {
+    if (holders[i + 1]!.music === null && page.music) page.music = null;
+    else if (holders[i + 1]!.music) page.music = holders[i + 1]!.music;
+  });
+
+  await save(copy);
+  return copy;
+}
+
+/** Share edit permission with another account (idempotent). */
+export async function addEditor(id: string, username: string): Promise<Book | undefined> {
+  const book = await getBook(id);
+  if (!book) return undefined;
+  const editors = new Set(book.editors ?? []);
+  if (username !== book.owner) editors.add(username);
+  book.editors = [...editors];
+  book.updatedAt = new Date().toISOString();
+  await save(book);
+  return book;
+}
+
+/** Take an account's edit permission away. */
+export async function removeEditor(id: string, username: string): Promise<Book | undefined> {
+  const book = await getBook(id);
+  if (!book) return undefined;
+  book.editors = (book.editors ?? []).filter((e) => e !== username);
+  book.updatedAt = new Date().toISOString();
+  await save(book);
+  return book;
+}
+
+/** Hand the book to a new owner. The old owner stays on as an editor (they
+ * can be removed later), and the new owner comes off the editor list. */
+export async function transferBook(id: string, newOwner: string): Promise<Book | undefined> {
+  const book = await getBook(id);
+  if (!book || !newOwner) return undefined;
+  const editors = new Set(book.editors ?? []);
+  if (book.owner && book.owner !== newOwner) editors.add(book.owner);
+  editors.delete(newOwner);
+  book.owner = newOwner;
+  book.editors = [...editors];
   book.updatedAt = new Date().toISOString();
   await save(book);
   return book;

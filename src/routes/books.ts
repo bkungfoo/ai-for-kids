@@ -10,6 +10,8 @@ import { runGuardedGeneration } from '../safety/guardedGeneration.js';
 import { guardText, permittedAtLevel } from '../safety/pipeline.js';
 import {
   addPage,
+  addEditor,
+  cloneBook,
   createBook,
   deleteBook,
   deletePage,
@@ -20,8 +22,10 @@ import {
   movePage,
   publishBook,
   removeEndPage,
+  removeEditor,
   revertBook,
   snapshotBook,
+  transferBook,
   unpublishBook,
   updateAuthors,
   updateCover,
@@ -57,6 +61,7 @@ import { generateMubertTrack, mubertConfigured } from '../providers/mubert.js';
 import { aceStepConfigured, generateAceStepTrack } from '../providers/aceStep.js';
 import { speakWithVoice } from '../providers/elevenVoices.js';
 import { getVoice } from '../voices/voiceStore.js';
+import { canonicalAccount } from '../auth/userStore.js';
 import { optionalString, requireString, ValidationError } from './validate.js';
 
 /**
@@ -233,7 +238,16 @@ function firstImage(result: unknown): BookImage | null {
  * "My storybooks". Returns undefined otherwise, so callers respond 404 and
  * never reveal that another user's book exists (let alone let it be edited).
  */
+/** May EDIT: the owner or any account the owner shared the book with. */
 async function getOwnedBook(id: string, user: string | undefined): Promise<Book | undefined> {
+  if (!user) return undefined;
+  const book = await getBook(id);
+  if (!book) return undefined;
+  return book.owner === user || (book.editors ?? []).includes(user) ? book : undefined;
+}
+
+/** Strictly the owner — for publish/unpublish/delete/share/transfer. */
+async function getBookIfOwner(id: string, user: string | undefined): Promise<Book | undefined> {
   if (!user) return undefined;
   const book = await getBook(id);
   return book && book.owner === user ? book : undefined;
@@ -246,8 +260,13 @@ booksApiRouter.get(
     // "My storybooks" is private to the signed-in account.
     const user = currentUser(req);
     const books = await listBooks();
-    const mine = books.filter((b) => b.owner === user);
-    res.json({ ok: true, books: mine.map(summarize) });
+    // Own books plus ones other accounts shared for editing (flagged so the
+    // shelf can badge them).
+    const mine = books.filter((b) => b.owner === user || (b.editors ?? []).includes(user ?? ''));
+    res.json({
+      ok: true,
+      books: mine.map((b) => ({ ...summarize(b), sharedBy: b.owner === user ? undefined : b.owner })),
+    });
   }),
 );
 
@@ -379,9 +398,12 @@ booksApiRouter.get(
   '/:id',
   asyncHandler(async (req, res) => {
     const book = await getBook(req.params.id ?? '');
-    // The owner may read their own book; anyone signed in may read a PUBLISHED
-    // book (the shared library). Otherwise 404 — don't reveal it exists.
-    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+    // The owner and shared editors may read the book; anyone signed in may
+    // read a PUBLISHED one (the library). Otherwise 404 — don't reveal it.
+    const user = currentUser(req);
+    const isOwner = !!book && book.owner === user;
+    const isEditor = !!book && !!user && (book.editors ?? []).includes(user);
+    if (!book || (!isOwner && !isEditor && book.status !== 'published')) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
@@ -395,7 +417,7 @@ booksApiRouter.get(
     }
     // `mine` lets the reader offer owner-only actions (e.g. unpublish) even on
     // published books, which anyone signed in may read.
-    res.json({ ok: true, book, mine: book.owner === currentUser(req) });
+    res.json({ ok: true, book, mine: isOwner, canEdit: isOwner || isEditor });
   }),
 );
 
@@ -866,6 +888,104 @@ booksApiRouter.post(
   }),
 );
 
+
+// Make my own copy: clone a published library book (or one of your own) onto
+// the current account's shelf as an editable, unpublished draft.
+booksApiRouter.post(
+  '/:id/clone',
+  asyncHandler(async (req, res) => {
+    const src = await getBook(req.params.id ?? '');
+    if (!src || (src.owner !== currentUser(req) && src.status !== 'published')) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    const copy = await cloneBook(src.id, currentUser(req));
+    if (!copy) {
+      res.status(500).json({ ok: false, error: 'Could not copy the book — try again!' });
+      return;
+    }
+    // A narrator voice travels only if the cloner may use it (their own, or a
+    // published library voice); otherwise the copy reads with the default.
+    if (copy.narratorVoiceId) {
+      const voice = await getVoice(copy.narratorVoiceId);
+      if (!voice || (voice.owner !== currentUser(req) && voice.status !== 'published')) {
+        await updateNarratorVoice(copy.id, null, null);
+        copy.narratorVoiceId = null;
+        copy.narratorVoiceName = null;
+      }
+    }
+    logger.info('book cloned', { from: src.id, to: copy.id, owner: copy.owner });
+    res.json({ ok: true, book: copy });
+  }),
+);
+
+// --- Sharing & ownership ---------------------------------------------------------
+// The OWNER can grant other accounts edit permission, revoke it, or hand the
+// whole book over. Editors can change content but never publish, delete,
+// share, or transfer.
+
+booksApiRouter.post(
+  '/:id/share',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const book = await getBookIfOwner(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    const target = canonicalAccount(requireString(req.body, 'username', { maxLength: 40 }));
+    if (!target) {
+      res.status(404).json({ ok: false, error: "There's no account with that name — check the spelling!" });
+      return;
+    }
+    if (target === book.owner) {
+      res.status(409).json({ ok: false, error: 'That account already owns this book!' });
+      return;
+    }
+    const updated = await addEditor(bookId, target);
+    logger.info('book shared', { bookId, with: target, by: book.owner });
+    res.json({ ok: true, book: updated });
+  }),
+);
+
+booksApiRouter.post(
+  '/:id/unshare',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const book = await getBookIfOwner(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    const target = requireString(req.body, 'username', { maxLength: 40 });
+    const updated = await removeEditor(bookId, target);
+    res.json({ ok: true, book: updated });
+  }),
+);
+
+booksApiRouter.post(
+  '/:id/transfer',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const book = await getBookIfOwner(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    const target = canonicalAccount(requireString(req.body, 'username', { maxLength: 40 }));
+    if (!target) {
+      res.status(404).json({ ok: false, error: "There's no account with that name — check the spelling!" });
+      return;
+    }
+    if (target === book.owner) {
+      res.status(409).json({ ok: false, error: 'That account already owns this book!' });
+      return;
+    }
+    const updated = await transferBook(bookId, target);
+    logger.info('book ownership transferred', { bookId, from: book.owner, to: target });
+    res.json({ ok: true, book: updated });
+  }),
+);
 
 // --- Narrator voice: read the whole book in a Voices-feature voice ---------------
 
@@ -1976,7 +2096,7 @@ booksApiRouter.post(
   asyncHandler(async (req, res) => {
     const bookId = req.params.id ?? '';
     // Only the owner may publish their own book.
-    if (!(await getOwnedBook(bookId, currentUser(req)))) {
+    if (!(await getBookIfOwner(bookId, currentUser(req)))) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
@@ -1997,7 +2117,7 @@ booksApiRouter.post(
   asyncHandler(async (req, res) => {
     const bookId = req.params.id ?? '';
     // Only the author account may pull its own book back.
-    const book = await getOwnedBook(bookId, currentUser(req));
+    const book = await getBookIfOwner(bookId, currentUser(req));
     if (!book) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
@@ -2017,7 +2137,7 @@ booksApiRouter.delete(
   asyncHandler(async (req, res) => {
     const bookId = req.params.id ?? '';
     // Only the owner may delete their own book.
-    if (!(await getOwnedBook(bookId, currentUser(req)))) {
+    if (!(await getBookIfOwner(bookId, currentUser(req)))) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }

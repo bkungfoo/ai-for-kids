@@ -12,6 +12,7 @@ import {
 import {
   createVoice,
   deleteVoice,
+  elevenIdShared,
   getVoice,
   keepVoice,
   listVoices,
@@ -46,7 +47,10 @@ function publicVoice(v: Voice, req: Request) {
 /** Release expired ElevenLabs slots surfaced by the store's TTL pruning. */
 function releaseExpired(expired: Voice[]): void {
   for (const voice of expired) {
-    deleteRemoteVoice(voice.elevenVoiceId).catch((err) => {
+    void elevenIdShared(voice.id, voice.elevenVoiceId).then((shared) => {
+      if (shared) return; // a clone still references the remote voice
+      return deleteRemoteVoice(voice.elevenVoiceId);
+    }).catch((err) => {
       logger.warn('failed to delete expired remote voice', {
         voiceId: voice.id,
         error: err instanceof Error ? err.message : String(err),
@@ -166,6 +170,29 @@ function ownedVoice(req: Request, res: Response, voice: Voice | undefined): voic
   return true;
 }
 
+// Save a copy of a library voice (or one of your own) to My voices: a new
+// record pointing at the same remote ElevenLabs voice. The remote slot is
+// reference-counted at delete time, so either copy outliving the other is fine.
+voicesApiRouter.post(
+  '/:id/clone',
+  asyncHandler(async (req, res) => {
+    const src = await getVoice(req.params.id ?? '');
+    if (!src || (src.owner !== currentUser(req) && src.status !== 'published')) {
+      res.status(404).json({ ok: false, error: 'Voice not found' });
+      return;
+    }
+    const copy = await createVoice({
+      name: src.name,
+      owner: currentUser(req),
+      elevenVoiceId: src.elevenVoiceId,
+    });
+    await keepVoice(copy.id); // it lands straight on the kid's shelf, unpublished
+    copy.kept = true;
+    logger.info('voice cloned', { from: src.id, to: copy.id, owner: copy.owner });
+    res.json({ ok: true, voice: publicVoice(copy, req) });
+  }),
+);
+
 voicesApiRouter.post(
   '/:id/save',
   asyncHandler(async (req, res) => {
@@ -203,6 +230,10 @@ voicesApiRouter.delete(
     const voice = await getVoice(req.params.id ?? '');
     if (!ownedVoice(req, res, voice)) return;
     await deleteVoice(voice.id);
+    if (await elevenIdShared(voice.id, voice.elevenVoiceId)) {
+      res.json({ ok: true });
+      return; // another copy still uses the remote voice — keep it
+    }
     deleteRemoteVoice(voice.elevenVoiceId).catch((err) => {
       logger.warn('failed to delete remote voice', {
         voiceId: voice.id,

@@ -598,6 +598,13 @@ const BOOK_TILE_JS = `
     }
     const meta = document.createElement('div');
     meta.className = 'book-meta';
+    if (b.sharedBy) {
+      const shared = document.createElement('span');
+      shared.style.cssText = 'display:inline-block;font-size:11px;font-weight:700;color:#2c6e8f;' +
+        'background:#dcebf1;border-radius:999px;padding:2px 8px;margin-bottom:4px;';
+      shared.textContent = '👥 Shared by ' + b.sharedBy;
+      meta.appendChild(shared);
+    }
     const t = document.createElement('div');
     t.className = 'book-title';
     t.textContent = b.title;
@@ -1094,6 +1101,7 @@ function readerClientJs(): string {
 
   let book = null;
   let mine = false; // signed-in account owns this book (server-computed)
+  let canEdit = false; // owner OR an account the owner shared editing with
   // Experimental features (background music) for THIS login session. Off by
   // default: no music buttons render and attached music stays silent, so the
   // feature is invisible unless the session opted in at login.
@@ -1868,8 +1876,12 @@ function readerClientJs(): string {
       }
       right.appendChild(actionCluster([
         readAllControls(),
+        // Library books: anyone signed in can take an editable copy home.
+        book.status === 'published' ? cloneBookControls() : null,
         // Whole-book narrator picker: above the music buttons, creator only.
-        mine && book.status !== 'published' ? narratorVoiceControls() : null,
+        canEdit && book.status !== 'published' ? narratorVoiceControls() : null,
+        // Sharing & ownership: strictly the owner's business.
+        mine && book.status !== 'published' ? shareControls() : null,
         editable() ? coverRegenControls() : null,
         expFeatures && editable() ? musicControls('cover', null) : null,
       ], 'cover-actions'));
@@ -2541,6 +2553,150 @@ function readerClientJs(): string {
         modal.insertBefore(card, cancelRow);
       }
     })();
+  }
+
+  // --- Clone from the library --------------------------------------------------
+  function cloneBookControls() {
+    const wrap = document.createElement('div');
+    wrap.className = 'readrow';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'readbtn';
+    btn.textContent = '📋 Make my own copy';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      setStatus('<span class="spinner"></span>Copying the book to your shelf…');
+      try {
+        const res = await fetch('/v1/books/' + bookId + '/clone', { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
+          setStatus('📋 Copied! Opening your very own version…');
+          location.href = '/books/' + data.book.id;
+          return;
+        }
+        const f = friendlyError(res, data);
+        setStatus(f.text, f.cls);
+        btn.disabled = false;
+      } catch {
+        setStatus('Could not reach the server. Check your connection and try again.', 'error');
+        btn.disabled = false;
+      }
+    });
+    wrap.appendChild(btn);
+    return wrap;
+  }
+
+  // --- Sharing & ownership -----------------------------------------------------
+  function shareControls() {
+    const wrap = document.createElement('div');
+    wrap.className = 'readrow';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'readbtn';
+    btn.textContent = '👥 Sharing & owner';
+    btn.addEventListener('click', openShareDialog);
+    wrap.appendChild(btn);
+    return wrap;
+  }
+
+  function openShareDialog() {
+    const dlg = openTaskDialog('👥 Share “' + book.title + '”');
+    const modal = dlg.modal;
+
+    const list = document.createElement('div');
+    modal.appendChild(list);
+
+    const addRow = document.createElement('div');
+    addRow.className = 'music-actions';
+    const nameInput = document.createElement('input');
+    nameInput.maxLength = 40;
+    nameInput.placeholder = 'Friend’s account name…';
+    nameInput.style.cssText = 'flex:1;min-width:160px;padding:9px 11px;font-size:14px;' +
+      'font-family:inherit;border:1px solid #cbbfa4;border-radius:8px;';
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'cta';
+    add.textContent = '➕ Share';
+    addRow.appendChild(nameInput);
+    addRow.appendChild(add);
+    modal.appendChild(addRow);
+
+    const doneRow = document.createElement('div');
+    doneRow.className = 'music-actions';
+    const done = document.createElement('button');
+    done.type = 'button';
+    done.className = 'linkbtn';
+    done.textContent = '✕ Close';
+    done.addEventListener('click', () => { dlg.close(); render(); });
+    doneRow.appendChild(done);
+    modal.appendChild(doneRow);
+
+    async function call(path, body) {
+      const res = await fetch('/v1/books/' + bookId + path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) { book = data.book; return null; }
+      return friendlyError(res, data);
+    }
+
+    function redraw() {
+      list.innerHTML = '';
+      const editors = book.editors || [];
+      const label = document.createElement('label');
+      label.textContent = editors.length
+        ? 'These accounts can edit this book too:'
+        : 'No one else can edit this book yet. Share it with a friend’s account!';
+      list.appendChild(label);
+      for (const name of editors) {
+        const row = document.createElement('div');
+        row.className = 'music-actions';
+        const who = document.createElement('span');
+        who.style.cssText = 'font-weight:700;flex:1;';
+        who.textContent = '👤 ' + name;
+        const crown = document.createElement('button');
+        crown.type = 'button';
+        crown.className = 'linkbtn';
+        crown.textContent = '👑 Make owner';
+        crown.addEventListener('click', async () => {
+          if (!confirm('Hand "' + book.title + '" over to ' + name + '? They become the owner and you stay on as an editor.')) return;
+          const err = await call('/transfer', { username: name });
+          if (err) { setStatus(err.text, err.cls); return; }
+          mine = false;
+          dlg.close();
+          setStatus('👑 ' + name + ' owns this book now! You can still edit it together.');
+          render();
+        });
+        const rm = document.createElement('button');
+        rm.type = 'button';
+        rm.className = 'linkbtn danger';
+        rm.textContent = '✕ Remove';
+        rm.addEventListener('click', async () => {
+          const err = await call('/unshare', { username: name });
+          if (err) setStatus(err.text, err.cls);
+          redraw();
+        });
+        row.appendChild(who);
+        row.appendChild(crown);
+        row.appendChild(rm);
+        list.appendChild(row);
+      }
+    }
+    redraw();
+
+    add.addEventListener('click', async () => {
+      const name = nameInput.value.trim();
+      if (!name) { setStatus('Type an account name to share with! ✏️', 'blocked'); return; }
+      add.disabled = true;
+      const err = await call('/share', { username: name });
+      add.disabled = false;
+      if (err) { setStatus(err.text, err.cls); return; }
+      nameInput.value = '';
+      setStatus('');
+      redraw();
+    });
   }
 
   function musicTarget(kind, index) {
@@ -3257,7 +3413,7 @@ function readerClientJs(): string {
         render();
       });
       actions.appendChild(edit);
-      actions.appendChild(makePublishButton());
+      if (mine) actions.appendChild(makePublishButton());
       return;
     }
 
@@ -3271,7 +3427,7 @@ function readerClientJs(): string {
       setTimeout(() => { location.href = '/books'; }, 700);
     });
     actions.appendChild(save);
-    actions.appendChild(makePublishButton());
+    if (mine) actions.appendChild(makePublishButton());
 
     // Cancel is only offered when a snapshot exists to go back to (i.e. the
     // book was reopened via "Edit this book" — not during first creation).
@@ -3416,6 +3572,7 @@ function readerClientJs(): string {
       }
       book = data.book;
       mine = !!data.mine;
+      canEdit = !!data.canEdit;
       // Did this login session opt into experimental features? Decides whether
       // any music UI renders or attached music plays — resolve before render.
       try {

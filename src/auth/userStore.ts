@@ -87,3 +87,14 @@ export function verifyRegisteredUser(username: unknown, password: unknown): stri
   }
   return matched;
 }
+
+/** Case-insensitive lookup across env + registered accounts. Returns the
+ * canonical username (for storage) or null when no such account exists. */
+export function canonicalAccount(username: unknown): string | null {
+  if (typeof username !== 'string' || !username.trim()) return null;
+  const lower = username.trim().toLowerCase();
+  const env = config.auth.accounts.find((a) => a.username.toLowerCase() === lower);
+  if (env) return env.username;
+  const reg = load().find((u) => u.username.toLowerCase() === lower);
+  return reg ? reg.username : null;
+}
