@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { requirePageAuth } from '../middleware/requireAuth.js';
 import { shell } from './pages.js';
+import { VOICES_BG_CHAT } from './wallpapers.js';
 
 /**
  * The Voices section, structured like Music and Storybooks: a hub (/voice)
@@ -15,6 +16,11 @@ for (const path of ['/voice', '/voice/new', '/voice/mine', '/voice/library']) {
 }
 
 const VOICES_CSS = `<style>
+  /* People-chatting wallpaper behind every Voices page; content stays in
+     opaque cards on top. */
+  body { background: #f4f8fc url("data:image/svg+xml,${encodeURIComponent(VOICES_BG_CHAT)}") repeat;
+    background-size: 380px; }
+  .card { background: #ffffff; box-shadow: 0 18px 40px rgba(16,42,54,.30); }
   main { width: min(94vw, 860px); }
   .vtiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
   @media (max-width: 620px) { .vtiles { grid-template-columns: 1fr; } }

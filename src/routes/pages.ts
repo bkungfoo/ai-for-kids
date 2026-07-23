@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { config } from '../config.js';
 import { requirePageAuth } from '../middleware/requireAuth.js';
 import { availableEngines, ENGINE_NAMES, illustratorName } from '../providers/imageProvider.js';
-import { MUSIC_BG_BRIGHT } from './wallpapers.js';
+import { MUSIC_BG_BRIGHT, VOICES_BG_CHAT } from './wallpapers.js';
 
 /**
  * Authenticated browser pages: the landing hub and one page per creative tool.
@@ -152,7 +152,7 @@ export function shell(opts: {
 pagesRouter.get('/', (_req: Request, res: Response) => {
   const tiles = FEATURES.map(
     (f) => `
-    <a class="tile${f.ready ? '' : ' soon'}${f.href === '/books' ? ' storybooks' : ''}${f.href === '/music' ? ' musictile' : ''}" href="${f.href}">
+    <a class="tile${f.ready ? '' : ' soon'}${f.href === '/books' ? ' storybooks' : ''}${f.href === '/music' ? ' musictile' : ''}${f.href === '/voice' ? ' voicestile' : ''}" href="${f.href}">
       <span class="tile-icon" aria-hidden="true">${f.icon}</span>
       <span class="tile-title">${f.title}</span>
       <span class="tile-blurb">${f.blurb}</span>
@@ -197,6 +197,14 @@ pagesRouter.get('/', (_req: Request, res: Response) => {
         }
         .badge { position: absolute; top: 12px; right: 12px; font-size: 11px; font-weight: 700;
           color: #2c6e8f; background: #dcebf1; border-radius: 999px; padding: 3px 9px; }
+        /* Voices tile: the people-chatting wallpaper behind the text. */
+        .tile.voicestile {
+          background:
+            linear-gradient(rgba(255,255,255,.62), rgba(255,255,255,.62)),
+            url("data:image/svg+xml,${encodeURIComponent(VOICES_BG_CHAT)}") repeat;
+          background-size: auto, 190px;
+          border-color: #d9c9b4;
+        }
         /* Experimental-features opt-in (primary account only, once per login) */
         .exp-backdrop { position: fixed; inset: 0; background: rgba(16,42,54,.55);
           z-index: 80; display: flex; align-items: center; justify-content: center; padding: 20px; }
