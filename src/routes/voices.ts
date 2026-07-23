@@ -21,6 +21,7 @@ import {
   type Voice,
 } from '../voices/voiceStore.js';
 import { requireString, ValidationError } from './validate.js';
+import { purgeNarratorVoice } from '../books/store.js';
 
 /**
  * The Voices feature: a kid records ~15s of speech, ElevenLabs clones it into
@@ -56,6 +57,41 @@ function releaseExpired(expired: Voice[]): void {
         error: err instanceof Error ? err.message : String(err),
       });
     });
+  }
+}
+
+/**
+ * Remove a voice EVERYWHERE: the store record, its remote ElevenLabs slot
+ * (unless a cloned copy still shares it), and every storybook that used it —
+ * those books drop their cached recordings and fall back to the default
+ * narrator.
+ */
+async function removeVoiceCompletely(voice: Voice): Promise<void> {
+  await deleteVoice(voice.id);
+  const books = await purgeNarratorVoice(voice.id);
+  if (books > 0) {
+    logger.info('voice purged from storybooks', { voiceId: voice.id, books });
+  }
+  if (!(await elevenIdShared(voice.id, voice.elevenVoiceId))) {
+    await deleteRemoteVoice(voice.elevenVoiceId).catch((err) => {
+      logger.warn('failed to delete remote voice', {
+        voiceId: voice.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+}
+
+/**
+ * ONE VOICE PER ACCOUNT: before a new voice is created, the account's
+ * existing voice (published or not, kept or not) is removed completely —
+ * including from the library and from any storybooks narrated with it.
+ */
+async function replaceExistingVoices(owner: string | undefined): Promise<void> {
+  const { voices, expired } = await listVoices();
+  releaseExpired(expired);
+  for (const voice of voices) {
+    if (voice.owner === owner) await removeVoiceCompletely(voice);
   }
 }
 
@@ -100,6 +136,9 @@ voicesApiRouter.post(
       });
       return;
     }
+
+    // One voice per account: the old one (and its remote slot) goes first.
+    await replaceExistingVoices(currentUser(req));
 
     let elevenVoiceId: string;
     try {
@@ -198,6 +237,12 @@ voicesApiRouter.post(
       res.status(404).json({ ok: false, error: 'Voice not found' });
       return;
     }
+    if (src.owner === currentUser(req)) {
+      res.status(409).json({ ok: false, error: 'That voice is already yours!' });
+      return;
+    }
+    // One voice per account: copying a library voice replaces your own.
+    await replaceExistingVoices(currentUser(req));
     const copy = await createVoice({
       name: src.name,
       owner: currentUser(req),
@@ -246,17 +291,7 @@ voicesApiRouter.delete(
   asyncHandler(async (req, res) => {
     const voice = await getVoice(req.params.id ?? '');
     if (!ownedVoice(req, res, voice)) return;
-    await deleteVoice(voice.id);
-    if (await elevenIdShared(voice.id, voice.elevenVoiceId)) {
-      res.json({ ok: true });
-      return; // another copy still uses the remote voice — keep it
-    }
-    deleteRemoteVoice(voice.elevenVoiceId).catch((err) => {
-      logger.warn('failed to delete remote voice', {
-        voiceId: voice.id,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
+    await removeVoiceCompletely(voice);
     res.json({ ok: true });
   }),
 );

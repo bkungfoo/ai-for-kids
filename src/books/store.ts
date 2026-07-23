@@ -340,6 +340,42 @@ export async function transferBook(id: string, newOwner: string): Promise<Book |
   return book;
 }
 
+/**
+ * A narrator voice was deleted: scrub it from every book — clear the
+ * narrator selection and remove all cached narration recorded in that voice
+ * (key prefix elv:<voiceId>:), so those books fall back to the default
+ * storybook narrator and re-record cleanly. Returns how many books changed.
+ */
+export async function purgeNarratorVoice(voiceId: string): Promise<number> {
+  const books = await listBooks();
+  let touched = 0;
+  const keyPrefix = `elv:${voiceId}:`;
+  for (const book of books) {
+    let changed = false;
+    if (book.narratorVoiceId === voiceId) {
+      delete book.narratorVoiceId;
+      delete book.narratorVoiceName;
+      changed = true;
+    }
+    if (book.introNarration?.key?.startsWith(keyPrefix)) {
+      delete book.introNarration;
+      changed = true;
+    }
+    for (const page of book.pages) {
+      if (page.narration?.key?.startsWith(keyPrefix)) {
+        delete page.narration;
+        changed = true;
+      }
+    }
+    if (changed) {
+      book.updatedAt = new Date().toISOString();
+      await save(book);
+      touched += 1;
+    }
+  }
+  return touched;
+}
+
 /** Move a book to the public library. Published books can no longer be edited. */
 export async function publishBook(id: string): Promise<Book | undefined> {
   const book = await getBook(id);

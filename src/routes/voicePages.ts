@@ -326,6 +326,7 @@ voicePagesRouter.get('/voice/new', (_req: Request, res: Response) => {
       body: `<div class="card">
         <h1>✨ Create new voice</h1>
         <p class="sub">Give your voice a name, then talk for at least 15 seconds so the computer can learn how you sound.</p>
+        <p class="sub" id="replace-note" hidden style="color:#8a5a00;font-weight:600"></p>
 
         <label class="group-label" for="vname">What should this voice be called?</label>
         <input id="vname" maxlength="40" placeholder="Captain Me, Robot Sam, My Voice…" />
@@ -382,6 +383,16 @@ function makerJs(): string {
   return `
   (() => {
     const MIN_SECONDS = 15;
+    // One voice per account: warn when a new recording will replace the old
+    // voice everywhere (library + any storybooks it narrates).
+    fetch('/v1/voices').then((r) => r.json()).then((d) => {
+      if (d && d.ok && d.voices && d.voices.length) {
+        const note = document.getElementById('replace-note');
+        note.textContent = '⚠️ You already have a voice called “' + d.voices[0].name +
+          '”. Making a new one replaces it — in the library too, and any storybook it reads goes back to the storybook narrator.';
+        note.hidden = false;
+      }
+    }).catch(() => {});
     // Reading-prompt picker: swap the passage when a story chip is chosen.
     const RP = ${JSON.stringify(Object.fromEntries(READING_PROMPTS.map((p) => [p.id, p.text])))};
     document.getElementById('rp-tabs').addEventListener('click', (e) => {
