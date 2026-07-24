@@ -144,6 +144,28 @@ export function shell(opts: {
     <form method="post" action="/logout"><button class="signout" type="submit">Sign out</button></form>
   </header>
   <main>${opts.body}</main>
+  <script>
+    // Engagement heartbeat: ping only while the user is really here (input
+    // in the last 30s AND the tab visible). Powers the analytics dashboard's
+    // time-on-site; silence past the idle limit ends the counted session.
+    (() => {
+      let lastInput = Date.now();
+      const mark = () => { lastInput = Date.now(); };
+      for (const ev of ['pointerdown', 'pointermove', 'keydown', 'scroll', 'touchstart']) {
+        addEventListener(ev, mark, { passive: true });
+      }
+      setInterval(() => {
+        if (document.visibilityState !== 'visible') return;
+        if (Date.now() - lastInput > 30000) return;
+        fetch('/v1/analytics/ping', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path: location.pathname }),
+          keepalive: true,
+        }).catch(() => {});
+      }, 30000);
+    })();
+  </script>
 </body>
 </html>`;
 }
