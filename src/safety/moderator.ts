@@ -30,6 +30,12 @@ const client = new Anthropic({ apiKey: config.anthropicApiKey });
 // us from fanning out unbounded concurrent requests under load.
 const limiter = new Semaphore(config.moderation.maxConcurrency);
 
+// The categories the MODEL may choose from. 'other' is reserved for internal
+// fail-closed verdicts: offering it in the schema let the model lazily tag
+// clear-cut content ("naked" -> sexual) as 'other', which is useless to the
+// child-facing "why was this blocked" UI. Excluding it forces a specific pick.
+const MODEL_CATEGORIES = RISK_CATEGORIES.filter((c) => c !== 'other');
+
 // JSON Schema for structured output. Note the structured-output constraints:
 // every object needs additionalProperties:false + required, and we use enums
 // rather than free-form strings so verdicts are predictable.
@@ -41,7 +47,7 @@ const VERDICT_SCHEMA = {
     severity: { type: 'string', enum: ['none', 'low', 'medium', 'high'] },
     categories: {
       type: 'array',
-      items: { type: 'string', enum: [...RISK_CATEGORIES] },
+      items: { type: 'string', enum: [...MODEL_CATEGORIES] },
     },
     reason: { type: 'string' },
     childMessage: { type: 'string' },
@@ -57,7 +63,7 @@ const GEMINI_VERDICT_SCHEMA = {
     severity: { type: 'STRING', enum: ['none', 'low', 'medium', 'high'] },
     categories: {
       type: 'ARRAY',
-      items: { type: 'STRING', enum: [...RISK_CATEGORIES] },
+      items: { type: 'STRING', enum: [...MODEL_CATEGORIES] },
     },
     reason: { type: 'STRING' },
     childMessage: { type: 'STRING' },

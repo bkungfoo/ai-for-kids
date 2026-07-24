@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { Router, type Request, type Response } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { currentUser } from '../middleware/requireAuth.js';
+import { currentUser, safetyLevelFor } from '../middleware/requireAuth.js';
 import { logger } from '../logger.js';
 import {
   CHILD_SAFE_MUSIC_PREAMBLE,
@@ -13,7 +13,7 @@ import {
   submitMusicTask,
 } from '../providers/aiMusic.js';
 import { ProviderRequestError } from '../providers/types.js';
-import { guardText } from '../safety/pipeline.js';
+import { guardText, permittedAtLevel } from '../safety/pipeline.js';
 import { MOOD_PHRASES, STYLE_PHRASES } from '../music/options.js';
 import {
   audioFileFor,
@@ -184,7 +184,7 @@ musicApiRouter.post(
     // The child's own words are the only free text — moderate them as input.
     if (prompt) {
       const verdict = await guardText([prompt], 'input');
-      if (!verdict.allowed) {
+      if (!permittedAtLevel(verdict, safetyLevelFor(req))) {
         res.status(403).json({
           ok: false,
           blocked: true,

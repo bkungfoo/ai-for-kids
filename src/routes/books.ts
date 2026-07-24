@@ -3,13 +3,15 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { Router, type Request, type Response } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { currentUser, experimentalEnabled } from '../middleware/requireAuth.js';
+import { currentUser, experimentalEnabled, safetyLevelFor } from '../middleware/requireAuth.js';
 import { imageProviderFor } from '../providers/imageProvider.js';
 import type { ImageEngine } from '../providers/types.js';
 import { runGuardedGeneration } from '../safety/guardedGeneration.js';
-import { guardText } from '../safety/pipeline.js';
+import { guardText, permittedAtLevel } from '../safety/pipeline.js';
 import {
   addPage,
+  addEditor,
+  cloneBook,
   createBook,
   deleteBook,
   deletePage,
@@ -20,13 +22,16 @@ import {
   movePage,
   publishBook,
   removeEndPage,
+  removeEditor,
   revertBook,
   snapshotBook,
+  transferBook,
   unpublishBook,
   updateAuthors,
   updateCover,
   updateCoverMusic,
   updateIntroNarration,
+  updateNarratorVoice,
   updatePage,
   pageMusicFile,
   savePageMusicAudio,
@@ -54,6 +59,9 @@ import {
 } from '../providers/aiMusic.js';
 import { generateMubertTrack, mubertConfigured } from '../providers/mubert.js';
 import { aceStepConfigured, generateAceStepTrack } from '../providers/aceStep.js';
+import { speakWithVoice } from '../providers/elevenVoices.js';
+import { getVoice } from '../voices/voiceStore.js';
+import { accountUniverse, canonicalAccount } from '../auth/userStore.js';
 import { optionalString, requireString, ValidationError } from './validate.js';
 
 /**
@@ -230,7 +238,30 @@ function firstImage(result: unknown): BookImage | null {
  * "My storybooks". Returns undefined otherwise, so callers respond 404 and
  * never reveal that another user's book exists (let alone let it be edited).
  */
+/** Universe of a book (via its owner); legacy ownerless books are harborhouse. */
+function bookUniverse(book: Book): string {
+  return accountUniverse(book.owner) ?? 'harborhouse';
+}
+
+/** May READ: the owner, a shared editor, or — for PUBLISHED books — any
+ * signed-in account in the SAME universe. The public and Harbor House
+ * universes never see each other's books. */
+function canReadBook(book: Book, user: string | undefined): boolean {
+  if (!user) return false;
+  if (book.owner === user || (book.editors ?? []).includes(user)) return true;
+  return book.status === 'published' && bookUniverse(book) === (accountUniverse(user) ?? 'harborhouse');
+}
+
+/** May EDIT: the owner or any account the owner shared the book with. */
 async function getOwnedBook(id: string, user: string | undefined): Promise<Book | undefined> {
+  if (!user) return undefined;
+  const book = await getBook(id);
+  if (!book) return undefined;
+  return book.owner === user || (book.editors ?? []).includes(user) ? book : undefined;
+}
+
+/** Strictly the owner — for publish/unpublish/delete/share/transfer. */
+async function getBookIfOwner(id: string, user: string | undefined): Promise<Book | undefined> {
   if (!user) return undefined;
   const book = await getBook(id);
   return book && book.owner === user ? book : undefined;
@@ -243,8 +274,13 @@ booksApiRouter.get(
     // "My storybooks" is private to the signed-in account.
     const user = currentUser(req);
     const books = await listBooks();
-    const mine = books.filter((b) => b.owner === user);
-    res.json({ ok: true, books: mine.map(summarize) });
+    // Own books plus ones other accounts shared for editing (flagged so the
+    // shelf can badge them).
+    const mine = books.filter((b) => b.owner === user || (b.editors ?? []).includes(user ?? ''));
+    res.json({
+      ok: true,
+      books: mine.map((b) => ({ ...summarize(b), sharedBy: b.owner === user ? undefined : b.owner })),
+    });
   }),
 );
 
@@ -261,7 +297,7 @@ booksApiRouter.post(
 
     // Title and author names are shown back on the cover — moderate them first.
     const titleVerdict = await guardText([title, ...authors], 'input');
-    if (!titleVerdict.allowed) {
+    if (!permittedAtLevel(titleVerdict, safetyLevelFor(req))) {
       res.status(403).json({
         ok: false,
         blocked: true,
@@ -277,7 +313,7 @@ booksApiRouter.post(
     // the look that later pages copy.
     const outcome = await runGuardedGeneration(imageProviderFor(imageEngine), {
       prompt: coverPrompt(title, userCoverPrompt),
-    });
+    }, { safetyLevel: safetyLevelFor(req) });
     if (outcome.status !== 200) {
       res.status(outcome.status).json(outcome.body);
       return;
@@ -313,7 +349,7 @@ booksApiRouter.post(
 
     const outcome = await runGuardedGeneration(imageProviderFor(book.imageEngine), {
       prompt: coverPrompt(book.title, userCoverPrompt),
-    });
+    }, { safetyLevel: safetyLevelFor(req) });
     if (outcome.status !== 200) {
       res.status(outcome.status).json(outcome.body);
       return;
@@ -376,23 +412,26 @@ booksApiRouter.get(
   '/:id',
   asyncHandler(async (req, res) => {
     const book = await getBook(req.params.id ?? '');
-    // The owner may read their own book; anyone signed in may read a PUBLISHED
-    // book (the shared library). Otherwise 404 — don't reveal it exists.
-    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+    // The owner and shared editors may read the book; anyone signed in may
+    // read a PUBLISHED one (the library). Otherwise 404 — don't reveal it.
+    const user = currentUser(req);
+    const isOwner = !!book && book.owner === user;
+    const isEditor = !!book && !!user && (book.editors ?? []).includes(user);
+    if (!book || !canReadBook(book, user)) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
     // Hide narration cached under an old voice/speed so the reader regenerates
     // instead of playing stale audio (response only; the file is untouched).
     for (const page of book.pages) {
-      if (page.narration && !validNarration(page)) delete page.narration;
+      if (page.narration && !validNarration(book, page)) delete page.narration;
     }
-    if (book.introNarration && book.introNarration.key !== narrationKey()) {
+    if (book.introNarration && book.introNarration.key !== narrationKeyFor(book)) {
       delete book.introNarration;
     }
     // `mine` lets the reader offer owner-only actions (e.g. unpublish) even on
     // published books, which anyone signed in may read.
-    res.json({ ok: true, book, mine: book.owner === currentUser(req) });
+    res.json({ ok: true, book, mine: isOwner, canEdit: isOwner || isEditor });
   }),
 );
 
@@ -420,7 +459,7 @@ booksApiRouter.post(
 
     // The story sentences are stored and displayed back — moderate them first.
     const textVerdict = await guardText([text], 'input');
-    if (!textVerdict.allowed) {
+    if (!permittedAtLevel(textVerdict, safetyLevelFor(req))) {
       res.status(403).json({
         ok: false,
         blocked: true,
@@ -441,7 +480,7 @@ booksApiRouter.post(
       prompt: pageScenePrompt(existing, text, imagePrompt, refs.length > 0),
       context: wholeStoryContext(existing.pages, targetPos),
       referenceImages: refs,
-    });
+    }, { safetyLevel: safetyLevelFor(req) });
     if (outcome.status !== 200) {
       res.status(outcome.status).json(outcome.body);
       return;
@@ -486,7 +525,7 @@ booksApiRouter.post(
       prompt: pageScenePrompt(book, page.text, imagePrompt, refs.length > 0),
       context: wholeStoryContext(book.pages, index),
       referenceImages: refs,
-    });
+    }, { safetyLevel: safetyLevelFor(req) });
     if (outcome.status !== 200) {
       res.status(outcome.status).json(outcome.body);
       return;
@@ -529,7 +568,7 @@ booksApiRouter.patch(
 
     // The new story words are stored and displayed back — moderate them first.
     const verdict = await guardText([text], 'input');
-    if (!verdict.allowed) {
+    if (!permittedAtLevel(verdict, safetyLevelFor(req))) {
       res.status(403).json({
         ok: false,
         blocked: true,
@@ -574,8 +613,22 @@ function narrationKey(): string {
   return `gt:${model}:${voice}:${speed}:r2`;
 }
 
-function validNarration(page: BookPage) {
-  return page.narration && page.narration.key === narrationKey() ? page.narration : undefined;
+/**
+ * The cache key for THIS book's narration: a kid-chosen Voices narrator keys
+ * on the voice id + delivery settings; otherwise the default engine's key.
+ * Selecting a different narrator changes the key, so every page regenerates
+ * (and re-caches) in the new voice without touching stored audio.
+ */
+function narrationKeyFor(book: Book): string {
+  if (book.narratorVoiceId) {
+    const { voicesModel, voicesSpeed } = config.providers.elevenlabs;
+    return `elv:${book.narratorVoiceId}:${voicesModel}:${voicesSpeed}:r1`;
+  }
+  return narrationKey();
+}
+
+function validNarration(book: Book, page: BookPage) {
+  return page.narration && page.narration.key === narrationKeyFor(book) ? page.narration : undefined;
 }
 
 /** True when some read-aloud engine is available server-side (else the reader
@@ -586,11 +639,48 @@ function narrationConfigured(): boolean {
 }
 
 /**
- * Synthesize narration for one page's words through the guarded pipeline.
- * Engine: ElevenLabs when its key is set, else Gemini TTS on the AI Studio
- * key. Returns the narration payload, or the non-200 outcome for forwarding.
+ * Synthesize narration for one of this book's pages. A book with a chosen
+ * Voices narrator speaks through the cloned voice (expressive v3 + pauses,
+ * same path as the Voices feature — the text is already-moderated book
+ * content); otherwise the default engine (ElevenLabs narrator when its key is
+ * set, else Gemini TTS). Returns the narration payload, or the non-200
+ * outcome for forwarding.
  */
-async function synthesizeNarration(text: string) {
+async function synthesizeNarrationFor(book: Book, text: string) {
+  if (book.narratorVoiceId) {
+    const voice = await getVoice(book.narratorVoiceId);
+    if (voice) {
+      try {
+        const audio = await speakWithVoice(voice.elevenVoiceId, text);
+        return {
+          outcome: { status: 200, body: { ok: true } } as const,
+          narration: {
+            mimeType: audio.mimeType,
+            dataBase64: audio.bytes.toString('base64'),
+            voiceId: voice.id,
+            key: narrationKeyFor(book),
+          },
+        };
+      } catch (err) {
+        logger.warn('custom-voice narration failed', {
+          bookId: book.id,
+          voiceId: book.narratorVoiceId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return {
+          outcome: { status: 502, body: { ok: false, error: 'The narrator voice had trouble — try again!' } },
+          narration: undefined,
+        };
+      }
+    }
+    // The chosen voice was deleted from the Voices store: fall through to the
+    // default engine so the book still reads aloud. (The audio caches under
+    // the custom key — consistent, just no longer the kid's clone.)
+    logger.warn('narrator voice missing — using default engine', {
+      bookId: book.id,
+      voiceId: book.narratorVoiceId,
+    });
+  }
   const outcome = elevenLabsProvider.isConfigured()
     ? await runGuardedGeneration(elevenLabsProvider, {
         text,
@@ -609,7 +699,7 @@ async function synthesizeNarration(text: string) {
       mimeType: result.contentType,
       dataBase64: result.audioBase64,
       voiceId: result.voiceId,
-      key: narrationKey(),
+      key: narrationKeyFor(book),
     },
   };
 }
@@ -623,12 +713,14 @@ async function synthesizeNarration(text: string) {
 function warmNarration(bookId: string, pageIndex: number, text: string): Promise<void> {
   return (async () => {
     try {
-      const { narration } = await synthesizeNarration(text);
+      const forBook = await getBook(bookId);
+      if (!forBook) return;
+      const { narration } = await synthesizeNarrationFor(forBook, text);
       if (!narration) return; // engine unconfigured / blocked — nothing to warm
       const book = await getBook(bookId);
       const page = book?.pages[pageIndex];
       if (!book || !page || page.text !== text) return; // page changed/moved meanwhile
-      if (validNarration(page)) return; // someone already narrated it
+      if (validNarration(book, page)) return; // someone already narrated it
       await updatePage(bookId, pageIndex, { narration });
       logger.info('narration pre-generated', { bookId, pageIndex, bytes: narration.dataBase64.length });
     } catch (err) {
@@ -656,11 +748,11 @@ function warmIntroNarration(bookId: string): Promise<void> {
       const book = await getBook(bookId);
       if (!book) return;
       const text = introText(book);
-      const { narration } = await synthesizeNarration(text);
+      const { narration } = await synthesizeNarrationFor(book, text);
       if (!narration) return;
       const fresh = await getBook(bookId);
       if (!fresh || introText(fresh) !== text) return; // authors changed meanwhile
-      if (fresh.introNarration && fresh.introNarration.key === narrationKey()) return;
+      if (fresh.introNarration && fresh.introNarration.key === narrationKeyFor(fresh)) return;
       await updateIntroNarration(bookId, narration);
       logger.info('intro narration pre-generated', { bookId });
     } catch (err) {
@@ -679,19 +771,19 @@ booksApiRouter.post(
   asyncHandler(async (req, res) => {
     const bookId = req.params.id ?? '';
     const book = await getBook(bookId);
-    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+    if (!book || !canReadBook(book, currentUser(req))) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
     const cached =
-      book.introNarration && book.introNarration.key === narrationKey()
+      book.introNarration && book.introNarration.key === narrationKeyFor(book)
         ? book.introNarration
         : undefined;
     if (cached) {
       res.json({ ok: true, narration: cached, cached: true });
       return;
     }
-    const { outcome, narration } = await synthesizeNarration(introText(book));
+    const { outcome, narration } = await synthesizeNarrationFor(book, introText(book));
     if (!narration) {
       res.status(outcome.status).json(outcome.body);
       return;
@@ -712,7 +804,7 @@ booksApiRouter.post(
     // audio of already-moderated words, not an edit, so published books allow
     // it too (the audio is cached into the book so it is generated only once).
     const book = await getBook(bookId);
-    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+    if (!book || !canReadBook(book, currentUser(req))) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
@@ -723,7 +815,7 @@ booksApiRouter.post(
     }
 
     // Cached (and still matching the current voice/speed)? Replay for free.
-    const cached = validNarration(page);
+    const cached = validNarration(book, page);
     if (cached) {
       res.json({ ok: true, narration: cached, pageIndex: index, cached: true });
       return;
@@ -731,7 +823,7 @@ booksApiRouter.post(
 
     // 501 only when no narrator engine is configured — the reader then falls
     // back to the browser's built-in speech synthesis.
-    const { outcome, narration } = await synthesizeNarration(page.text);
+    const { outcome, narration } = await synthesizeNarrationFor(book, page.text);
     if (!narration) {
       res.status(outcome.status).json(outcome.body);
       return;
@@ -748,7 +840,7 @@ booksApiRouter.get(
   '/:id/narration-status',
   asyncHandler(async (req, res) => {
     const book = await getBook(req.params.id ?? '');
-    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+    if (!book || !canReadBook(book, currentUser(req))) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
@@ -757,10 +849,10 @@ booksApiRouter.get(
     for (const page of book.pages) {
       if (!page.text) continue; // nothing to read aloud on this page
       total += 1;
-      if (validNarration(page)) done += 1;
+      if (validNarration(book, page)) done += 1;
     }
     // The cover intro (title + authors) is always spoken, so it counts too.
-    const introReady = !!(book.introNarration && book.introNarration.key === narrationKey());
+    const introReady = !!(book.introNarration && book.introNarration.key === narrationKeyFor(book));
     total += 1;
     if (introReady) done += 1;
     // With no engine configured there's nothing to generate or wait for — the
@@ -779,7 +871,7 @@ booksApiRouter.post(
   asyncHandler(async (req, res) => {
     const bookId = req.params.id ?? '';
     const book = await getBook(bookId);
-    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+    if (!book || !canReadBook(book, currentUser(req))) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
@@ -792,9 +884,9 @@ booksApiRouter.post(
     // is already recorded (e.g. a second reader opened the same book).
     const pending: Array<() => Promise<void>> = [];
     book.pages.forEach((page, index) => {
-      if (page.text && !validNarration(page)) pending.push(() => warmNarration(bookId, index, page.text));
+      if (page.text && !validNarration(book, page)) pending.push(() => warmNarration(bookId, index, page.text));
     });
-    if (!(book.introNarration && book.introNarration.key === narrationKey())) {
+    if (!(book.introNarration && book.introNarration.key === narrationKeyFor(book))) {
       pending.push(() => warmIntroNarration(bookId));
     }
     void (async () => {
@@ -807,6 +899,282 @@ booksApiRouter.post(
       }
     })();
     res.status(202).json({ ok: true, configured: true, warming: pending.length });
+  }),
+);
+
+
+// Make my own copy: clone a published library book (or one of your own) onto
+// the current account's shelf as an editable, unpublished draft.
+booksApiRouter.post(
+  '/:id/clone',
+  asyncHandler(async (req, res) => {
+    const src = await getBook(req.params.id ?? '');
+    if (!src || !canReadBook(src, currentUser(req))) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    const copy = await cloneBook(src.id, currentUser(req));
+    if (!copy) {
+      res.status(500).json({ ok: false, error: 'Could not copy the book — try again!' });
+      return;
+    }
+    // A narrator voice travels only if the cloner may use it (their own, or a
+    // published library voice); otherwise the copy reads with the default.
+    if (copy.narratorVoiceId) {
+      const voice = await getVoice(copy.narratorVoiceId);
+      if (!voice || (voice.owner !== currentUser(req) && voice.status !== 'published')) {
+        await updateNarratorVoice(copy.id, null, null);
+        copy.narratorVoiceId = null;
+        copy.narratorVoiceName = null;
+      }
+    }
+    logger.info('book cloned', { from: src.id, to: copy.id, owner: copy.owner });
+    res.json({ ok: true, book: copy });
+  }),
+);
+
+// --- Sharing & ownership ---------------------------------------------------------
+// The OWNER can grant other accounts edit permission, revoke it, or hand the
+// whole book over. Editors can change content but never publish, delete,
+// share, or transfer.
+
+booksApiRouter.post(
+  '/:id/share',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const book = await getBookIfOwner(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    const target = canonicalAccount(requireString(req.body, 'username', { maxLength: 40 }));
+    if (!target) {
+      res.status(404).json({ ok: false, error: "There's no account with that name — check the spelling!" });
+      return;
+    }
+    if (target === book.owner) {
+      res.status(409).json({ ok: false, error: 'That account already owns this book!' });
+      return;
+    }
+    if ((accountUniverse(target) ?? 'harborhouse') !== bookUniverse(book)) {
+      res.status(404).json({ ok: false, error: "There's no account with that name — check the spelling!" });
+      return;
+    }
+    const updated = await addEditor(bookId, target);
+    logger.info('book shared', { bookId, with: target, by: book.owner });
+    res.json({ ok: true, book: updated });
+  }),
+);
+
+booksApiRouter.post(
+  '/:id/unshare',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const book = await getBookIfOwner(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    const target = requireString(req.body, 'username', { maxLength: 40 });
+    const updated = await removeEditor(bookId, target);
+    res.json({ ok: true, book: updated });
+  }),
+);
+
+booksApiRouter.post(
+  '/:id/transfer',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const book = await getBookIfOwner(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    const target = canonicalAccount(requireString(req.body, 'username', { maxLength: 40 }));
+    if (!target) {
+      res.status(404).json({ ok: false, error: "There's no account with that name — check the spelling!" });
+      return;
+    }
+    if (target === book.owner) {
+      res.status(409).json({ ok: false, error: 'That account already owns this book!' });
+      return;
+    }
+    if ((accountUniverse(target) ?? 'harborhouse') !== bookUniverse(book)) {
+      res.status(404).json({ ok: false, error: "There's no account with that name — check the spelling!" });
+      return;
+    }
+    const updated = await transferBook(bookId, target);
+    logger.info('book ownership transferred', { bookId, from: book.owner, to: target });
+    res.json({ ok: true, book: updated });
+  }),
+);
+
+// --- Narrator voice: read the whole book in a Voices-feature voice ---------------
+
+// Pick (or clear) the book's narrator. The voice must be the owner's own or a
+// published library voice. Cached narration re-keys automatically, so pages
+// regenerate in the new voice on demand (or in bulk via warm-narration).
+booksApiRouter.post(
+  '/:id/narrator-voice',
+  asyncHandler(async (req, res) => {
+    if ((accountUniverse(currentUser(req)) ?? 'harborhouse') === 'public') {
+      res.status(404).json({ ok: false, error: 'Not found' });
+      return;
+    }
+    const bookId = req.params.id ?? '';
+    const book = await getOwnedBook(bookId, currentUser(req));
+    if (!book) {
+      res.status(404).json({ ok: false, error: 'Book not found' });
+      return;
+    }
+    if (book.status === 'published') return publishedConflict(res);
+    const raw = (req.body as { voiceId?: unknown }).voiceId;
+    let updated: Book | undefined;
+    if (raw === null || raw === undefined || raw === '') {
+      updated = await updateNarratorVoice(bookId, null, null);
+    } else {
+      if (typeof raw !== 'string' || raw.length > 64) throw new ValidationError('Bad voiceId');
+      const voice = await getVoice(raw);
+      if (!voice || (voice.owner !== currentUser(req) && voice.status !== 'published')) {
+        res.status(404).json({ ok: false, error: 'Voice not found' });
+        return;
+      }
+      updated = await updateNarratorVoice(bookId, voice.id, voice.name);
+    }
+    res.json({ ok: true, book: updated });
+  }),
+);
+
+// --- Narration retakes: redo one page's read-aloud ------------------------------
+// The creator hears fresh takes before anything is replaced: takes live in
+// memory (like music jobs), the child previews each, and only the accepted
+// one is written into the page's narration cache.
+
+interface NarrationTakeSet {
+  id: string;
+  owner: string | undefined;
+  bookId: string;
+  pageIndex: number;
+  clips: Array<{ mimeType: string; dataBase64: string }>;
+  createdAt: number;
+}
+const narrationTakes = new Map<string, NarrationTakeSet>();
+const NARRATION_TAKES_TTL_MS = 30 * 60 * 1000;
+function pruneNarrationTakes(): void {
+  const now = Date.now();
+  for (const [id, set] of narrationTakes) {
+    if (now - set.createdAt > NARRATION_TAKES_TTL_MS) narrationTakes.delete(id);
+  }
+}
+
+booksApiRouter.post(
+  '/:id/pages/:index/narration-takes',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const index = Number.parseInt(req.params.index ?? '', 10);
+    const book = await getOwnedBook(bookId, currentUser(req));
+    const page = Number.isInteger(index) && index >= 0 ? book?.pages[index] : undefined;
+    if (!book || !page) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    if (!page.text.trim()) {
+      res.status(409).json({ ok: false, error: 'This page has no words to read' });
+      return;
+    }
+    if (!narrationConfigured()) {
+      res.status(501).json({ ok: false, error: 'The narrator is not configured yet' });
+      return;
+    }
+    pruneNarrationTakes();
+    // Two fresh takes (the engines vary between generations — that IS the
+    // reroll). Sequential to be gentle on the providers.
+    const clips: Array<{ mimeType: string; dataBase64: string }> = [];
+    for (let n = 0; n < 2; n++) {
+      const { outcome, narration } = await synthesizeNarrationFor(book, page.text);
+      if (!narration) {
+        if (clips.length === 0) {
+          res.status(outcome.status).json(outcome.body);
+          return;
+        }
+        break; // one good take beats an error
+      }
+      clips.push({ mimeType: narration.mimeType, dataBase64: narration.dataBase64 });
+    }
+    const set: NarrationTakeSet = {
+      id: randomUUID(),
+      owner: currentUser(req),
+      bookId,
+      pageIndex: index,
+      clips,
+      createdAt: Date.now(),
+    };
+    narrationTakes.set(set.id, set);
+    res.json({ ok: true, setId: set.id, clips: clips.length });
+  }),
+);
+
+function takeSetFor(req: Request): NarrationTakeSet | undefined {
+  const set = narrationTakes.get(req.params.setId ?? '');
+  if (!set || set.owner !== currentUser(req) || set.bookId !== (req.params.id ?? '')) {
+    return undefined;
+  }
+  return set;
+}
+
+// Preview one take (streamed from memory).
+booksApiRouter.get('/:id/narration-take/:setId/audio/:n', (req: Request, res: Response) => {
+  const set = takeSetFor(req);
+  const n = Number.parseInt(req.params.n ?? '', 10);
+  const clip = set && Number.isInteger(n) ? set.clips[n - 1] : undefined;
+  if (!set || !clip) {
+    res.status(404).json({ ok: false, error: 'Not found' });
+    return;
+  }
+  const bytes = Buffer.from(clip.dataBase64, 'base64');
+  res.set('content-type', clip.mimeType);
+  res.set('content-length', String(bytes.length));
+  res.send(bytes);
+});
+
+// Accept a take: it becomes the page's cached narration. Cancel is simply
+// never calling this (the set times out of memory on its own).
+booksApiRouter.post(
+  '/:id/pages/:index/narration-accept',
+  asyncHandler(async (req, res) => {
+    const bookId = req.params.id ?? '';
+    const index = Number.parseInt(req.params.index ?? '', 10);
+    const setId = requireString(req.body, 'setId', { maxLength: 64 });
+    const choice = Number((req.body as { choice?: unknown }).choice);
+    const book = await getOwnedBook(bookId, currentUser(req));
+    const page = Number.isInteger(index) && index >= 0 ? book?.pages[index] : undefined;
+    if (!book || !page) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    const set = narrationTakes.get(setId);
+    const clip =
+      set && set.owner === currentUser(req) && set.bookId === bookId && set.pageIndex === index
+        ? set.clips[choice - 1]
+        : undefined;
+    if (!clip) {
+      res.status(404).json({ ok: false, error: 'That take is no longer available — try again!' });
+      return;
+    }
+    const updated = await updatePage(bookId, index, {
+      narration: {
+        mimeType: clip.mimeType,
+        dataBase64: clip.dataBase64,
+        voiceId: book.narratorVoiceId ?? 'default',
+        key: narrationKeyFor(book),
+      },
+    });
+    if (!updated) {
+      res.status(404).json({ ok: false, error: 'Page not found' });
+      return;
+    }
+    narrationTakes.delete(setId);
+    res.json({ ok: true, book: updated, pageIndex: index });
   }),
 );
 
@@ -836,7 +1204,7 @@ booksApiRouter.post(
       book,
       pageIndex: index,
       sourceText,
-    });
+    }, { safetyLevel: safetyLevelFor(req) });
     if (outcome.status !== 200) {
       res.status(outcome.status).json(outcome.body);
       return;
@@ -874,7 +1242,7 @@ booksApiRouter.post(
     }
     if (book.status === 'published') return publishedConflict(res);
 
-    const outcome = await runGuardedGeneration(suggestPromptProvider, { book, text });
+    const outcome = await runGuardedGeneration(suggestPromptProvider, { book, text }, { safetyLevel: safetyLevelFor(req) });
     res.status(outcome.status).json(outcome.body);
   }),
 );
@@ -905,7 +1273,7 @@ booksApiRouter.post(
       book,
       text,
       ...(excludeIndex !== undefined ? { excludeIndex } : {}),
-    });
+    }, { safetyLevel: safetyLevelFor(req) });
     res.status(outcome.status).json(outcome.body);
   }),
 );
@@ -948,7 +1316,7 @@ booksApiRouter.post(
       text,
       targetPos,
       ...(excludeIndex !== undefined ? { excludeIndex } : {}),
-    });
+    }, { safetyLevel: safetyLevelFor(req) });
     res.status(outcome.status).json(outcome.body);
   }),
 );
@@ -1183,7 +1551,7 @@ booksApiRouter.post(
 
     // The child may have edited the prompt — moderate it as input.
     const verdict = await guardText([prompt], 'input');
-    if (!verdict.allowed) {
+    if (!permittedAtLevel(verdict, safetyLevelFor(req))) {
       res.status(403).json({
         ok: false,
         blocked: true,
@@ -1364,7 +1732,7 @@ booksApiRouter.get(
     const bookId = req.params.id ?? '';
     const index = Number.parseInt(req.params.index ?? '', 10);
     const book = await getBook(bookId);
-    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+    if (!book || !canReadBook(book, currentUser(req))) {
       res.status(404).json({ ok: false, error: 'Not found' });
       return;
     }
@@ -1421,7 +1789,7 @@ booksApiRouter.post(
     if (book.status === 'published') return publishedConflict(res);
 
     const verdict = await guardText([prompt], 'input');
-    if (!verdict.allowed) {
+    if (!permittedAtLevel(verdict, safetyLevelFor(req))) {
       res.status(403).json({
         ok: false,
         blocked: true,
@@ -1525,7 +1893,7 @@ booksApiRouter.get(
   asyncHandler(async (req, res) => {
     const bookId = req.params.id ?? '';
     const book = await getBook(bookId);
-    if (!book || (book.owner !== currentUser(req) && book.status !== 'published')) {
+    if (!book || !canReadBook(book, currentUser(req))) {
       res.status(404).json({ ok: false, error: 'Not found' });
       return;
     }
@@ -1725,7 +2093,7 @@ booksApiRouter.patch(
     // Author names are displayed on the title page — moderate them.
     if (authors.length > 0) {
       const verdict = await guardText(authors, 'input');
-      if (!verdict.allowed) {
+      if (!permittedAtLevel(verdict, safetyLevelFor(req))) {
         res.status(403).json({
           ok: false,
           blocked: true,
@@ -1754,7 +2122,7 @@ booksApiRouter.post(
   asyncHandler(async (req, res) => {
     const bookId = req.params.id ?? '';
     // Only the owner may publish their own book.
-    if (!(await getOwnedBook(bookId, currentUser(req)))) {
+    if (!(await getBookIfOwner(bookId, currentUser(req)))) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
@@ -1775,7 +2143,7 @@ booksApiRouter.post(
   asyncHandler(async (req, res) => {
     const bookId = req.params.id ?? '';
     // Only the author account may pull its own book back.
-    const book = await getOwnedBook(bookId, currentUser(req));
+    const book = await getBookIfOwner(bookId, currentUser(req));
     if (!book) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
@@ -1795,7 +2163,7 @@ booksApiRouter.delete(
   asyncHandler(async (req, res) => {
     const bookId = req.params.id ?? '';
     // Only the owner may delete their own book.
-    if (!(await getOwnedBook(bookId, currentUser(req)))) {
+    if (!(await getBookIfOwner(bookId, currentUser(req)))) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
     }
@@ -1814,8 +2182,14 @@ export const libraryApiRouter = Router();
 
 libraryApiRouter.get(
   '/',
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
     const books = await listBooks();
-    res.json({ ok: true, books: books.filter((b) => b.status === 'published').map(summarize) });
+    const universe = accountUniverse(currentUser(req)) ?? 'harborhouse';
+    res.json({
+      ok: true,
+      books: books
+        .filter((b) => b.status === 'published' && bookUniverse(b) === universe)
+        .map(summarize),
+    });
   }),
 );

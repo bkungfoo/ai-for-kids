@@ -76,7 +76,11 @@ function parseAccounts(): Account[] {
 
 const accounts = parseAccounts();
 
+// External URL for links placed in emails (invite approvals).
+const publicBaseUrl = str('PUBLIC_BASE_URL', 'https://harbor-house.brianfoo.ai');
+
 export const config = {
+  publicBaseUrl,
   port: int('PORT', 8080),
   // Interface to bind. 0.0.0.0 exposes the server on all interfaces (external
   // IP included) — fine for testing, but serve behind HTTPS for real use.
@@ -199,6 +203,19 @@ export const config = {
       // Storybook read-aloud narrator voice. When no ElevenLabs key is set the
       // reader falls back to the browser's built-in speech synthesis.
       narratorVoiceId: str('ELEVENLABS_NARRATOR_VOICE', 'EXAVITQu4vr4xnSDxMaL'),
+      // The Voices feature (kid voice cloning) uses its OWN key variable so
+      // enabling it doesn't flip the storybook narrator to ElevenLabs (that
+      // engine choice keys the narration cache — see routes/books.ts).
+      voicesApiKey: str('ELEVENLABS_VOICES_API_KEY') || str('ELEVENLABS_API_KEY'),
+      // Delivery tuning for cloned voices, all adjustable without code changes.
+      // Speed 1.0 = natural pace (slowing an IVC clone drags its artifacts).
+      // LOWER stability = livelier intonation; style adds expressive delivery;
+      // similarity anchors the kid's timbre.
+      voicesSpeed: Math.min(1.2, Math.max(0.7, Number(str('ELEVENLABS_VOICES_SPEED', '1.0')) || 1.0)),
+      voicesModel: str('ELEVENLABS_VOICES_MODEL', 'eleven_multilingual_v2'),
+      voicesStability: Math.min(1, Math.max(0, Number(str('ELEVENLABS_VOICES_STABILITY', '0.35')) || 0.35)),
+      voicesStyle: Math.min(1, Math.max(0, Number(str('ELEVENLABS_VOICES_STYLE', '0.45')) || 0.45)),
+      voicesSimilarity: Math.min(1, Math.max(0, Number(str('ELEVENLABS_VOICES_SIMILARITY', '0.75')) || 0.75)),
     },
     gemini: {
       apiKey: str('GEMINI_API_KEY'),

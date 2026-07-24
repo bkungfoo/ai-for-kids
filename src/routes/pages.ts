@@ -1,8 +1,8 @@
 import { Router, type Request, type Response } from 'express';
 import { config } from '../config.js';
-import { requirePageAuth } from '../middleware/requireAuth.js';
+import { requirePageAuth, currentUniverse } from '../middleware/requireAuth.js';
 import { availableEngines, ENGINE_NAMES, illustratorName } from '../providers/imageProvider.js';
-import { MUSIC_BG_BRIGHT } from './wallpapers.js';
+import { MUSIC_BG_BRIGHT, VOICES_BG_CHAT } from './wallpapers.js';
 
 /**
  * Authenticated browser pages: the landing hub and one page per creative tool.
@@ -29,7 +29,7 @@ interface Feature {
 const FEATURES: Feature[] = [
   { href: '/books', icon: '📖', title: 'Storybooks', blurb: 'Read, write, and use AI to illustrate storybooks', ready: true },
   { href: '/music', icon: '🎵', title: 'Music', blurb: 'Make a song with AI', ready: true },
-  { href: '/voice', icon: '🎙️', title: 'Voices', blurb: 'Turn words into speech', ready: false },
+  { href: '/voice', icon: '🎙️', title: 'Voices', blurb: 'Make a voice that sounds like you', ready: true },
   { href: '/code', icon: '💻', title: 'Coding', blurb: 'Build something with code', ready: false },
 ];
 
@@ -149,10 +149,13 @@ export function shell(opts: {
 }
 
 // --- Landing hub: one button per feature -------------------------------------
-pagesRouter.get('/', (_req: Request, res: Response) => {
-  const tiles = FEATURES.map(
+pagesRouter.get('/', (req: Request, res: Response) => {
+  // Public-universe accounts are storybooks-only: one tile, no hints of more.
+  const features =
+    currentUniverse(req) === 'public' ? FEATURES.filter((f) => f.href === '/books') : FEATURES;
+  const tiles = features.map(
     (f) => `
-    <a class="tile${f.ready ? '' : ' soon'}${f.href === '/books' ? ' storybooks' : ''}${f.href === '/music' ? ' musictile' : ''}" href="${f.href}">
+    <a class="tile${f.ready ? '' : ' soon'}${f.href === '/books' ? ' storybooks' : ''}${f.href === '/music' ? ' musictile' : ''}${f.href === '/voice' ? ' voicestile' : ''}" href="${f.href}">
       <span class="tile-icon" aria-hidden="true">${f.icon}</span>
       <span class="tile-title">${f.title}</span>
       <span class="tile-blurb">${f.blurb}</span>
@@ -197,6 +200,14 @@ pagesRouter.get('/', (_req: Request, res: Response) => {
         }
         .badge { position: absolute; top: 12px; right: 12px; font-size: 11px; font-weight: 700;
           color: #2c6e8f; background: #dcebf1; border-radius: 999px; padding: 3px 9px; }
+        /* Voices tile: the people-chatting wallpaper behind the text. */
+        .tile.voicestile {
+          background:
+            linear-gradient(rgba(255,255,255,.62), rgba(255,255,255,.62)),
+            url("data:image/svg+xml,${encodeURIComponent(VOICES_BG_CHAT)}") repeat;
+          background-size: auto, 190px;
+          border-color: #d9c9b4;
+        }
         /* Experimental-features opt-in (primary account only, once per login) */
         .exp-backdrop { position: fixed; inset: 0; background: rgba(16,42,54,.55);
           z-index: 80; display: flex; align-items: center; justify-content: center; padding: 20px; }
@@ -229,6 +240,20 @@ pagesRouter.get('/', (_req: Request, res: Response) => {
           box.checked = false;
           label.appendChild(box);
           label.appendChild(document.createTextNode('Allow experimental features'));
+          // Moderation strictness for this session (kept per-login; kids'
+          // accounts never see this dialog and always run the strictest).
+          const lvlLabel = document.createElement('label');
+          lvlLabel.style.cssText = 'display:block;margin-top:14px;font-size:13px;font-weight:700;color:#4a6c7c;';
+          lvlLabel.textContent = 'Safety level';
+          const lvl = document.createElement('select');
+          lvl.style.cssText = 'display:block;width:100%;margin-top:6px;padding:9px 11px;font-size:14px;' +
+            'font-family:inherit;border:1px solid #c9dbe4;border-radius:10px;background:#fff;color:#102a36;';
+          for (const v of ['BLOCK_LOW_AND_ABOVE', 'BLOCK_MEDIUM_AND_ABOVE', 'BLOCK_ONLY_HIGH', 'BLOCK_NONE']) {
+            const opt = document.createElement('option');
+            opt.value = v;
+            opt.textContent = v + (v === 'BLOCK_LOW_AND_ABOVE' ? ' (default)' : '');
+            lvl.appendChild(opt);
+          }
           const go = document.createElement('button');
           go.type = 'button';
           go.className = 'cta';
@@ -239,13 +264,15 @@ pagesRouter.get('/', (_req: Request, res: Response) => {
               await fetch('/v1/experimental', {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ enabled: box.checked }),
+                body: JSON.stringify({ enabled: box.checked, safetyLevel: lvl.value }),
               });
             } catch {}
             backdrop.remove();
           });
           modal.appendChild(h);
           modal.appendChild(label);
+          modal.appendChild(lvlLabel);
+          modal.appendChild(lvl);
           modal.appendChild(go);
           backdrop.appendChild(modal);
           document.body.appendChild(backdrop);
@@ -261,12 +288,92 @@ pagesRouter.get('/images', (_req: Request, res: Response) => res.redirect('/book
 
 /** Friendly error text shared by the storybook pages' client scripts. */
 const CLIENT_HELPERS_JS = `
+  // Safety blocks (bad words / unsafe ideas) surface in a popup the child
+  // can't miss, instead of the status line below the book. Self-contained
+  // inline styles so every storybook page can show it, above any open dialog.
+  // The moderator's category ids, in words a child understands.
+  const SAFETY_REASONS = {
+    violence: '🥊 Fighting or violence',
+    weapons: '⚔️ Weapons',
+    sexual: '🔞 Grown-up content',
+    self_harm: '🩹 Getting hurt',
+    harassment: '😠 Being unkind to someone',
+    hate: '💔 Mean or hateful words',
+    dangerous_acts: '⚡ Dangerous things to copy',
+    drugs: '🚭 Drugs, alcohol, or smoking',
+    pii: '🔒 Personal information',
+    profanity: '🤐 Bad words',
+    illegal: '🚫 Against the rules or the law',
+    age_inappropriate: '👻 Too scary or grown-up',
+    jailbreak: '🎭 Trying to trick the safety rules',
+    other: '🚧 Not right for kids',
+  };
+  function showSafetyDialog(message, categories) {
+    const old = document.getElementById('safety-dialog');
+    if (old) old.remove();
+    const backdrop = document.createElement('div');
+    backdrop.id = 'safety-dialog';
+    backdrop.style.cssText = 'position:fixed;inset:0;background:rgba(30,22,10,.55);' +
+      'z-index:120;display:flex;align-items:center;justify-content:center;padding:20px;';
+    const modal = document.createElement('div');
+    modal.style.cssText = 'background:#fdf9f0;border-radius:14px;width:min(92vw,420px);' +
+      'padding:22px 24px;box-shadow:0 24px 60px rgba(0,0,0,.45);text-align:center;';
+    const icon = document.createElement('div');
+    icon.style.cssText = 'font-size:40px;';
+    icon.textContent = '⚠️';
+    const h = document.createElement('h3');
+    h.style.cssText = 'margin:8px 0 10px;font-size:18px;color:#5a4632;';
+    h.textContent = 'Hold on a moment!';
+    const p = document.createElement('p');
+    p.style.cssText = 'margin:0 0 14px;font-size:15px;line-height:1.55;color:#3d2f1e;';
+    p.textContent = message; // moderator text — always plain text, never HTML
+    // Why it was blocked: the moderator's categories, in kid words.
+    const reasons = (categories || [])
+      .map((c) => SAFETY_REASONS[c] || String(c).replace(/_/g, ' '))
+      .filter((v, i, a) => a.indexOf(v) === i);
+    let reasonBox = null;
+    if (reasons.length) {
+      reasonBox = document.createElement('div');
+      reasonBox.style.cssText = 'margin:0 0 18px;display:flex;flex-wrap:wrap;gap:6px;justify-content:center;';
+      const why = document.createElement('span');
+      why.style.cssText = 'font-size:13px;font-weight:800;color:#6b5d43;align-self:center;';
+      why.textContent = 'Why?';
+      reasonBox.appendChild(why);
+      for (const r of reasons) {
+        const chip = document.createElement('span');
+        chip.style.cssText = 'font-size:13px;font-weight:700;color:#8a5a00;background:#f6ecd2;' +
+          'border:1px solid #e0c98a;border-radius:999px;padding:4px 11px;';
+        chip.textContent = r;
+        reasonBox.appendChild(chip);
+      }
+    }
+    const ok = document.createElement('button');
+    ok.type = 'button';
+    ok.textContent = 'OK';
+    ok.style.cssText = 'padding:10px 34px;font-size:15px;font-weight:700;color:#fff;' +
+      'background:#2c6e8f;border:none;border-radius:10px;cursor:pointer;';
+    ok.addEventListener('click', () => backdrop.remove());
+    modal.appendChild(icon);
+    modal.appendChild(h);
+    modal.appendChild(p);
+    if (reasonBox) modal.appendChild(reasonBox);
+    modal.appendChild(ok);
+    backdrop.appendChild(modal);
+    document.body.appendChild(backdrop);
+    ok.focus();
+  }
   function friendlyError(res, data) {
     if (data && data.code === 'credits_exhausted') {
       return { text: '🪫 ' + (data.error || 'The AI credits have run out — ask a grown-up to top up the account.'), cls: 'error' };
     }
     if (res.status === 403 && data && data.blocked) {
-      return { text: data.message || "Let's try a different idea — keep it friendly and safe!", cls: 'blocked' };
+      // A real safety block: the popup carries the warning (and WHY it was
+      // blocked, from the moderator's categories); nothing below the book.
+      showSafetyDialog(
+        data.message || "Let's try a different idea — keep it friendly and safe!",
+        data.verdict && data.verdict.categories,
+      );
+      return { text: '', cls: '' };
     }
     if (res.status === 401) return { text: 'Your session ended. <a href="/login">Sign in again</a>.', cls: 'error' };
     if (res.status === 409 && data && data.error) return { text: data.error, cls: 'blocked' };
@@ -494,6 +601,13 @@ const BOOK_TILE_JS = `
     }
     const meta = document.createElement('div');
     meta.className = 'book-meta';
+    if (b.sharedBy) {
+      const shared = document.createElement('span');
+      shared.style.cssText = 'display:inline-block;font-size:11px;font-weight:700;color:#2c6e8f;' +
+        'background:#dcebf1;border-radius:999px;padding:2px 8px;margin-bottom:4px;';
+      shared.textContent = '👥 Shared by ' + b.sharedBy;
+      meta.appendChild(shared);
+    }
     const t = document.createElement('div');
     t.className = 'book-title';
     t.textContent = b.title;
@@ -757,6 +871,9 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .cta.cancel { background: #8a8a8a; }
         .cta.cancel:hover { background: #737373; }
         .cta.cancel:disabled { background: #bdbdbd; }
+        .cta.share { background: #2f8f6f; }
+        .cta.share:hover { background: #26775c; }
+        .cta.share:disabled { background: #9dc7b7; }
         .pubnote { text-align: center; color: #5a4632; font-size: 13px; font-weight: 600; margin-top: 12px; }
         /* Repaint-the-picture controls under a page's image. The toggle pill
            is centered like every other button row; an opened form goes back
@@ -888,6 +1005,16 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         /* While composing, the line stands where the music buttons were —
            centered like every other row on the page. */
         .musicstack .music-working { justify-content: center; font-size: 13px; }
+        /* Narrator voice picker + per-page retakes */
+        .readbtn.voice-btn { background: #efe9f7; border-color: #a58bc9; }
+        .voicepick { max-height: 46vh; overflow-y: auto; }
+        .voiceopt { display: flex; align-items: center; gap: 8px; padding: 7px 4px;
+          font-size: 14.5px; cursor: pointer; border-radius: 8px; }
+        .voiceopt:hover { background: #f3ecfb; }
+        .voiceopt input { width: 16px; height: 16px; accent-color: #7a5aa0; }
+        .voicegroup { font-size: 12px; font-weight: 800; color: #6b5d43;
+          text-transform: uppercase; letter-spacing: .5px; margin: 12px 0 2px; }
+        .voicehint { font-size: 13.5px; color: #6b5d43; margin-top: 10px; }
         /* "Getting the voices ready" dialog: the count of pages recorded so far. */
         .narr-progress { margin-top: 10px; text-align: center; font-size: 13px;
           font-weight: 700; color: #6b5d43; }
@@ -980,10 +1107,12 @@ function readerClientJs(): string {
 
   let book = null;
   let mine = false; // signed-in account owns this book (server-computed)
+  let canEdit = false; // owner OR an account the owner shared editing with
   // Experimental features (background music) for THIS login session. Off by
   // default: no music buttons render and attached music stays silent, so the
   // feature is invisible unless the session opted in at login.
   let expFeatures = false;
+  let universe = 'harborhouse'; // public-universe readers get the default narrator only
   // Spread 0 = cover; spreads 1..N = story pages; spread N+1 = "add a page"
   // (the add spread disappears once the book has a "The End" page).
   let spread = 0;
@@ -1053,9 +1182,35 @@ function readerClientJs(): string {
   let advancing = false;   // suppress stopReading() during an auto page flip
   let curReadBtn = null;   // the current spread's read button (for read-all)
   let curReadStart = null; // starts reading the current spread (set in render)
+  // Read-all pacing without background music: a beat on the finished page
+  // (soak in the art), then the flip, then a smaller beat before the next
+  // page's words begin.
+  const PRE_FLIP_PAUSE_MS = 2000;
+  const POST_FLIP_PAUSE_MS = 1000;
+  let pageTurnTimer = null;
+  function clearPageTurnPause() {
+    if (pageTurnTimer) { clearTimeout(pageTurnTimer); pageTurnTimer = null; }
+  }
+  // After a page's narration finishes in read-all: experimental sessions pace
+  // page turns with the music fade; everyone else gets the quiet 2s+1s beats.
+  function scheduleReadAllAdvance(fade) {
+    if (expFeatures) {
+      fade.wait(() => { if (readAllMode) advanceReadAll(); });
+      return;
+    }
+    fade.wait(() => {
+      if (!readAllMode) return;
+      clearPageTurnPause();
+      pageTurnTimer = setTimeout(() => {
+        pageTurnTimer = null;
+        if (readAllMode) advanceReadAll(POST_FLIP_PAUSE_MS);
+      }, PRE_FLIP_PAUSE_MS);
+    });
+  }
 
   function stopReading() {
     readAllMode = false;
+    clearPageTurnPause(); // waiting out the between-pages beat? cancel it
     clearNarrationDelay(); // vocals scheduled but not started yet? cancel them
     haltPlayback();
     stopAllBg(); // manual stop silences the music (and any fade) immediately
@@ -1255,7 +1410,7 @@ function readerClientJs(): string {
         // read-all, the page flip waits for the fade to finish.
         const fade = beginBgFade();
         if (reading && reading.btn === btn) haltPlayback();
-        if (readAllMode) fade.wait(() => { if (readAllMode) advanceReadAll(); });
+        if (readAllMode) scheduleReadAllAdvance(fade);
       });
       if (musicUrl) {
         // Let the music set the scene for a second before the vocals begin.
@@ -1279,7 +1434,10 @@ function readerClientJs(): string {
   }
 
   // After a page finishes in read-all: flip forward and read the next spread.
-  function advanceReadAll() {
+  // postDelayMs (non-experimental pacing) holds the fresh page quietly for a
+  // beat before its words begin; skipped spreads carry the delay forward so
+  // the pause lands on the page that actually gets read.
+  function advanceReadAll(postDelayMs) {
     if (!readAllMode || !book) return;
     const lastPageSpread = book.pages.length + 1;
     if (spread >= lastPageSpread) { readAllMode = false; return; }
@@ -1287,9 +1445,17 @@ function readerClientJs(): string {
     spread++;
     render();
     advancing = false;
-    if (spread === 1) { advanceReadAll(); return; } // skip the title page
-    if (curReadStart) curReadStart();
-    else advanceReadAll(); // nothing readable here — keep going
+    if (spread === 1) { advanceReadAll(postDelayMs); return; } // skip the title page
+    if (!curReadStart) { advanceReadAll(postDelayMs); return; } // nothing readable here — keep going
+    if (postDelayMs) {
+      clearPageTurnPause();
+      pageTurnTimer = setTimeout(() => {
+        pageTurnTimer = null;
+        if (readAllMode && curReadStart) curReadStart();
+      }, postDelayMs);
+      return;
+    }
+    curReadStart();
   }
 
   /** Cover button: read the whole book, flipping pages automatically. */
@@ -1327,7 +1493,7 @@ function readerClientJs(): string {
       const onDone = () => {
         const fade = beginBgFade();
         if (reading && reading.btn === btn) haltPlayback();
-        if (readAllMode) fade.wait(() => { if (readAllMode) advanceReadAll(); });
+        if (readAllMode) scheduleReadAllAdvance(fade);
       };
       // The narrator voice reads the cover intro too: cached audio -> server
       // narration -> browser voice only as the last resort.
@@ -1717,6 +1883,10 @@ function readerClientJs(): string {
       }
       right.appendChild(actionCluster([
         readAllControls(),
+        // Library books: anyone signed in can take an editable copy home.
+        book.status === 'published' ? cloneBookControls() : null,
+        // Whole-book narrator picker: above the music buttons, creator only.
+        universe !== 'public' && canEdit && book.status !== 'published' ? narratorVoiceControls() : null,
         editable() ? coverRegenControls() : null,
         expFeatures && editable() ? musicControls('cover', null) : null,
       ], 'cover-actions'));
@@ -1752,6 +1922,9 @@ function readerClientJs(): string {
       left.appendChild(actionCluster([
         readRow(spread - 2, p, t),
         editable() ? wordsEditControls(spread - 2, p, t) : null,
+        // Redo this page's read-aloud — always ABOVE the music buttons (which
+        // only exist for experimental sessions; otherwise this takes their spot).
+        editable() && p.text && !p.isEnd ? narrationControls(spread - 2) : null,
         // Background music, once the page has words and picture.
         expFeatures && editable() && p.text && p.image ? musicControls('page', spread - 2) : null,
         editable() ? pageToolsControls(spread - 2) : null,
@@ -2168,6 +2341,365 @@ function readerClientJs(): string {
     h.textContent = titleText;
     modal.appendChild(h);
     return { modal: modal, close: close };
+  }
+
+  // --- Narrator voice: read the whole book in one of the kid's Voices --------
+  // The cover carries a picker (default narrator / My voices / library
+  // voices); each story page gets a retake button that rerolls just that
+  // page's read-aloud and lets the creator audition two takes.
+
+  function narratorVoiceControls() {
+    const wrap = document.createElement('div');
+    wrap.className = 'readrow';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'readbtn voice-btn';
+    btn.textContent = '🎙️ Narrator: ' + (book.narratorVoiceName || 'Storybook narrator');
+    btn.addEventListener('click', openNarratorDialog);
+    wrap.appendChild(btn);
+    return wrap;
+  }
+
+  function openNarratorDialog() {
+    stopReading();
+    const dlg = openTaskDialog('🎙️ Who should read this book?');
+    const modal = dlg.modal;
+    const list = document.createElement('div');
+    list.className = 'voicepick';
+    list.textContent = 'Finding the voices…';
+    modal.appendChild(list);
+
+    const actions = document.createElement('div');
+    actions.className = 'music-actions';
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.className = 'cta';
+    save.textContent = '✅ Use this narrator';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'linkbtn';
+    cancel.textContent = '✕ Cancel';
+    cancel.addEventListener('click', () => { setStatus(''); dlg.close(); });
+    actions.appendChild(save);
+    actions.appendChild(cancel);
+    modal.appendChild(actions);
+
+    function option(value, label, checked) {
+      const row = document.createElement('label');
+      row.className = 'voiceopt';
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'narrator';
+      radio.value = value;
+      radio.checked = checked;
+      row.appendChild(radio);
+      row.appendChild(document.createTextNode(' ' + label));
+      return row;
+    }
+
+    (async () => {
+      let mineVoices = [];
+      let libraryVoices = [];
+      try {
+        const results = await Promise.all([fetch('/v1/voices'), fetch('/v1/voices/library')]);
+        const md = await results[0].json().catch(() => ({}));
+        const ld = await results[1].json().catch(() => ({}));
+        if (results[0].ok && md.ok) mineVoices = md.voices;
+        if (results[1].ok && ld.ok) libraryVoices = ld.voices.filter((v) => !v.mine);
+      } catch {}
+      list.textContent = '';
+      const current = book.narratorVoiceId || '';
+      list.appendChild(option('', '📖 Storybook narrator (default)', current === ''));
+      if (mineVoices.length) {
+        const h = document.createElement('div');
+        h.className = 'voicegroup';
+        h.textContent = '🗣️ My voices';
+        list.appendChild(h);
+        for (const v of mineVoices) list.appendChild(option(v.id, v.name, current === v.id));
+      }
+      if (libraryVoices.length) {
+        const h = document.createElement('div');
+        h.className = 'voicegroup';
+        h.textContent = '📚 From the library';
+        list.appendChild(h);
+        for (const v of libraryVoices) list.appendChild(option(v.id, v.name, current === v.id));
+      }
+      if (!mineVoices.length && !libraryVoices.length) {
+        const hint = document.createElement('div');
+        hint.className = 'voicehint';
+        hint.innerHTML = 'Want the book read in YOUR voice? <a href="/voice/new">Create one in Voices</a> first!';
+        list.appendChild(hint);
+      }
+    })();
+
+    save.addEventListener('click', async () => {
+      const picked = modal.querySelector('input[name="narrator"]:checked');
+      if (!picked) { setStatus('Pick a narrator first! 🎙️', 'blocked'); return; }
+      save.disabled = true;
+      try {
+        const res = await fetch('/v1/books/' + bookId + '/narrator-voice', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ voiceId: picked.value || null }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
+          book = data.book;
+          dlg.close();
+          render();
+          // Re-record every page in the new voice now (cached once done), and
+          // when the book is in reading mode show the friendly wait dialog.
+          try { fetch('/v1/books/' + bookId + '/warm-narration', { method: 'POST' }); } catch {}
+          if (!editMode) watchNarrationReadiness();
+          setStatus('🎙️ ' + (book.narratorVoiceName ? book.narratorVoiceName + ' will read this book!' : 'Back to the storybook narrator!') + ' New recordings are being made now.');
+          return;
+        }
+        const f = friendlyError(res, data);
+        setStatus(f.text, f.cls);
+        save.disabled = false;
+      } catch {
+        setStatus('Could not reach the server. Check your connection and try again.', 'error');
+        save.disabled = false;
+      }
+    });
+  }
+
+  function narrationControls(pageIndex) {
+    const wrap = document.createElement('div');
+    wrap.className = 'readrow';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'readbtn voice-btn';
+    btn.textContent = "🎙️ Redo this page's voice";
+    btn.addEventListener('click', () => openNarrationRetakeDialog(pageIndex));
+    wrap.appendChild(btn);
+    return wrap;
+  }
+
+  function openNarrationRetakeDialog(pageIndex) {
+    stopReading();
+    const dlg = openTaskDialog('🎙️ New voice takes for this page');
+    const modal = dlg.modal;
+    const line = document.createElement('div');
+    line.className = 'music-working';
+    line.innerHTML = '<span class="notes-anim">🎙️</span><span>Recording two fresh takes…</span>';
+    modal.appendChild(line);
+    const cancelRow = document.createElement('div');
+    cancelRow.className = 'music-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'linkbtn';
+    cancel.textContent = '✕ Cancel — keep the old voice';
+    cancel.addEventListener('click', () => { setStatus(''); dlg.close(); });
+    cancelRow.appendChild(cancel);
+    modal.appendChild(cancelRow);
+
+    (async () => {
+      let data;
+      try {
+        const res = await fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/narration-takes', { method: 'POST' });
+        data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          const f = friendlyError(res, data);
+          setStatus(f.text, f.cls);
+          dlg.close();
+          return;
+        }
+      } catch {
+        setStatus('Could not reach the server. Check your connection and try again.', 'error');
+        dlg.close();
+        return;
+      }
+      line.remove();
+      const label = document.createElement('label');
+      label.textContent = 'Pick the reading you like best!';
+      modal.insertBefore(label, cancelRow);
+      for (let n = 1; n <= (data.clips || 0); n++) {
+        const card = document.createElement('div');
+        card.className = 'music-cand';
+        const title = document.createElement('div');
+        title.className = 'mc-title';
+        title.textContent = '🎙️ Take ' + n;
+        card.appendChild(title);
+        const audio = document.createElement('audio');
+        audio.controls = true;
+        audio.preload = 'none';
+        audio.src = '/v1/books/' + bookId + '/narration-take/' + data.setId + '/audio/' + n;
+        card.appendChild(audio);
+        const use = document.createElement('button');
+        use.type = 'button';
+        use.className = 'cta';
+        use.textContent = '✅ Use this take';
+        use.addEventListener('click', async () => {
+          modal.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+          try {
+            const res = await fetch('/v1/books/' + bookId + '/pages/' + pageIndex + '/narration-accept', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ setId: data.setId, choice: n }),
+            });
+            const rd = await res.json().catch(() => ({}));
+            if (res.ok && rd.ok) {
+              book = rd.book;
+              dlg.close();
+              setStatus('🎙️ New voice saved for this page!');
+              render();
+              return;
+            }
+            const f = friendlyError(res, rd);
+            setStatus(f.text, f.cls);
+            modal.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+          } catch {
+            setStatus('Could not reach the server. Check your connection and try again.', 'error');
+            modal.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+          }
+        });
+        card.appendChild(use);
+        modal.insertBefore(card, cancelRow);
+      }
+    })();
+  }
+
+  // --- Clone from the library --------------------------------------------------
+  function cloneBookControls() {
+    const wrap = document.createElement('div');
+    wrap.className = 'readrow';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'readbtn';
+    btn.textContent = '📋 Make my own copy';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      setStatus('<span class="spinner"></span>Copying the book to your shelf…');
+      try {
+        const res = await fetch('/v1/books/' + bookId + '/clone', { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
+          setStatus('📋 Copied! Opening your very own version…');
+          location.href = '/books/' + data.book.id;
+          return;
+        }
+        const f = friendlyError(res, data);
+        setStatus(f.text, f.cls);
+        btn.disabled = false;
+      } catch {
+        setStatus('Could not reach the server. Check your connection and try again.', 'error');
+        btn.disabled = false;
+      }
+    });
+    wrap.appendChild(btn);
+    return wrap;
+  }
+
+  // --- Sharing & ownership -----------------------------------------------------
+  // An action-bar button (next to Save / Publish), owner-only, drafts only.
+  function makeShareButton() {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cta share';
+    btn.textContent = '🤝 Share with a friend';
+    btn.addEventListener('click', openShareDialog);
+    return btn;
+  }
+
+  function openShareDialog() {
+    const dlg = openTaskDialog('👥 Share “' + book.title + '”');
+    const modal = dlg.modal;
+
+    const list = document.createElement('div');
+    modal.appendChild(list);
+
+    const addRow = document.createElement('div');
+    addRow.className = 'music-actions';
+    const nameInput = document.createElement('input');
+    nameInput.maxLength = 40;
+    nameInput.placeholder = 'Friend’s account name…';
+    nameInput.style.cssText = 'flex:1;min-width:160px;padding:9px 11px;font-size:14px;' +
+      'font-family:inherit;border:1px solid #cbbfa4;border-radius:8px;';
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'cta';
+    add.textContent = '➕ Share';
+    addRow.appendChild(nameInput);
+    addRow.appendChild(add);
+    modal.appendChild(addRow);
+
+    const doneRow = document.createElement('div');
+    doneRow.className = 'music-actions';
+    const done = document.createElement('button');
+    done.type = 'button';
+    done.className = 'linkbtn';
+    done.textContent = '✕ Close';
+    done.addEventListener('click', () => { dlg.close(); render(); });
+    doneRow.appendChild(done);
+    modal.appendChild(doneRow);
+
+    async function call(path, body) {
+      const res = await fetch('/v1/books/' + bookId + path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) { book = data.book; return null; }
+      return friendlyError(res, data);
+    }
+
+    function redraw() {
+      list.innerHTML = '';
+      const editors = book.editors || [];
+      const label = document.createElement('label');
+      label.textContent = editors.length
+        ? 'These accounts can edit this book too:'
+        : 'No one else can edit this book yet. Share it with a friend’s account!';
+      list.appendChild(label);
+      for (const name of editors) {
+        const row = document.createElement('div');
+        row.className = 'music-actions';
+        const who = document.createElement('span');
+        who.style.cssText = 'font-weight:700;flex:1;';
+        who.textContent = '👤 ' + name;
+        const crown = document.createElement('button');
+        crown.type = 'button';
+        crown.className = 'linkbtn';
+        crown.textContent = '👑 Make owner';
+        crown.addEventListener('click', async () => {
+          if (!confirm('Hand "' + book.title + '" over to ' + name + '? They become the owner and you stay on as an editor.')) return;
+          const err = await call('/transfer', { username: name });
+          if (err) { setStatus(err.text, err.cls); return; }
+          mine = false;
+          dlg.close();
+          setStatus('👑 ' + name + ' owns this book now! You can still edit it together.');
+          render();
+        });
+        const rm = document.createElement('button');
+        rm.type = 'button';
+        rm.className = 'linkbtn danger';
+        rm.textContent = '✕ Remove';
+        rm.addEventListener('click', async () => {
+          const err = await call('/unshare', { username: name });
+          if (err) setStatus(err.text, err.cls);
+          redraw();
+        });
+        row.appendChild(who);
+        row.appendChild(crown);
+        row.appendChild(rm);
+        list.appendChild(row);
+      }
+    }
+    redraw();
+
+    add.addEventListener('click', async () => {
+      const name = nameInput.value.trim();
+      if (!name) { setStatus('Type an account name to share with! ✏️', 'blocked'); return; }
+      add.disabled = true;
+      const err = await call('/share', { username: name });
+      add.disabled = false;
+      if (err) { setStatus(err.text, err.cls); return; }
+      nameInput.value = '';
+      setStatus('');
+      redraw();
+    });
   }
 
   function musicTarget(kind, index) {
@@ -2884,7 +3416,8 @@ function readerClientJs(): string {
         render();
       });
       actions.appendChild(edit);
-      actions.appendChild(makePublishButton());
+      if (mine) actions.appendChild(makePublishButton());
+      if (mine) actions.appendChild(makeShareButton());
       return;
     }
 
@@ -2898,7 +3431,8 @@ function readerClientJs(): string {
       setTimeout(() => { location.href = '/books'; }, 700);
     });
     actions.appendChild(save);
-    actions.appendChild(makePublishButton());
+    if (mine) actions.appendChild(makePublishButton());
+    if (mine) actions.appendChild(makeShareButton());
 
     // Cancel is only offered when a snapshot exists to go back to (i.e. the
     // book was reopened via "Edit this book" — not during first creation).
@@ -3043,12 +3577,14 @@ function readerClientJs(): string {
       }
       book = data.book;
       mine = !!data.mine;
+      canEdit = !!data.canEdit;
       // Did this login session opt into experimental features? Decides whether
       // any music UI renders or attached music plays — resolve before render.
       try {
         const er = await fetch('/v1/experimental');
         const ed = await er.json().catch(() => ({}));
         expFeatures = !!(er.ok && ed.ok && ed.enabled);
+        if (er.ok && ed.ok && ed.universe) universe = ed.universe;
       } catch {}
       // Music generation lives on the server: restore any job still composing
       // (or waiting for review) so a reload doesn't lose the page's state.
@@ -3092,5 +3628,5 @@ function comingSoon(icon: string, name: string): string {
 }
 
 // (/music is served by musicPagesRouter — see routes/musicPages.ts.)
-pagesRouter.get('/voice', (_req, res) => res.type('html').send(comingSoon('🎙️', 'Voices')));
+// /voice is served by voicePagesRouter (routes/voicePages.ts).
 pagesRouter.get('/code', (_req, res) => res.type('html').send(comingSoon('💻', 'Coding')));

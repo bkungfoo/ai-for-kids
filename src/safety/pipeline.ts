@@ -44,3 +44,39 @@ function combine(verdicts: Verdict[]): Verdict {
     childMessage: blocked[0]!.childMessage,
   };
 }
+
+// --- Operator-tunable safety level ---------------------------------------------
+// The primary account's login dialog can relax how much of a blocked verdict
+// actually blocks, mirroring Gemini's HarmBlockThreshold names. Everyone else
+// (and every session by default) runs the strictest level. SafeSearch image
+// screening is NOT affected — generated pictures are always screened.
+
+export const SAFETY_LEVELS = [
+  'BLOCK_LOW_AND_ABOVE',
+  'BLOCK_MEDIUM_AND_ABOVE',
+  'BLOCK_ONLY_HIGH',
+  'BLOCK_NONE',
+] as const;
+export type SafetyLevel = (typeof SAFETY_LEVELS)[number];
+
+/**
+ * True when this verdict may pass at the session's safety level. An allowed
+ * verdict always passes; a blocked one passes only when its severity sits
+ * below the level's blocking floor. Undefined level = strictest behavior
+ * (any blocked verdict blocks), which is also the only behavior non-primary
+ * accounts can ever get.
+ */
+export function permittedAtLevel(verdict: Verdict, level?: SafetyLevel): boolean {
+  if (verdict.allowed) return true;
+  const rank = SEVERITY_RANK[verdict.severity] ?? 3;
+  switch (level) {
+    case 'BLOCK_NONE':
+      return true;
+    case 'BLOCK_ONLY_HIGH':
+      return rank < SEVERITY_RANK.high;
+    case 'BLOCK_MEDIUM_AND_ABOVE':
+      return rank < SEVERITY_RANK.medium;
+    default:
+      return false;
+  }
+}

@@ -1,10 +1,11 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { config } from '../config.js';
+import { verifyRegisteredUser } from './userStore.js';
 
 /**
- * A fixed set of accounts from config (env-overridable), defaulting to the
- * provisioned HarborHouse credentials plus any AUTH_ADDITIONAL_USERS. There is
- * intentionally no registration path — these are the only valid users.
+ * Accounts come from two places: the fixed env-provisioned set (HarborHouse +
+ * AUTH_ADDITIONAL_USERS) and the self-registration store (scrypt-hashed,
+ * created on the login page behind a puzzle + rate limit).
  */
 
 /** Constant-time string compare via fixed-length SHA-256 digests. */
@@ -27,7 +28,7 @@ export function authenticate(username: unknown, password: unknown): string | nul
     const passOk = safeEqual(password, acct.password);
     if (userOk && passOk) matched = acct.username;
   }
-  return matched;
+  return matched ?? verifyRegisteredUser(username, password);
 }
 
 /**

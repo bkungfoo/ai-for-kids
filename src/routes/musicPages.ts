@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import { requirePageAuth } from '../middleware/requireAuth.js';
+import { currentUniverse, requirePageAuth } from '../middleware/requireAuth.js';
 import { MUSIC_MOODS, MUSIC_STYLES } from '../music/options.js';
 import { MUSIC_BG_BRIGHT, MUSIC_BG_DARK, MUSIC_BG_PURPLE } from './wallpapers.js';
 import { shell } from './pages.js';
@@ -15,6 +15,14 @@ export const musicPagesRouter = Router();
 for (const path of ['/music', '/music/new', '/music/mine', '/music/library']) {
   musicPagesRouter.get(path, requirePageAuth);
 }
+// Public-universe accounts are storybooks-only: bounce them home.
+musicPagesRouter.use('/music', (req, res, next) => {
+  if (currentUniverse(req) === 'public') {
+    res.redirect('/');
+    return;
+  }
+  next();
+});
 
 const MUSIC_MODE_CSS = `<style>
   /* Theme variables per background mode — the card ("dialog box"), chips,
