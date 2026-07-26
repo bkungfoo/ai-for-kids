@@ -1905,6 +1905,8 @@ function readerClientJs(): string {
       }
       right.appendChild(actionCluster([
         readAllControls(),
+        // Print: landscape 2-up duplex with cut lines (see routes/printPage.ts).
+        printControls(),
         // Library books: anyone signed in can take an editable copy home.
         book.status === 'published' ? cloneBookControls() : null,
         // Whole-book narrator picker: above the music buttons, creator only.
@@ -2580,6 +2582,18 @@ function readerClientJs(): string {
         modal.insertBefore(card, cancelRow);
       }
     })();
+  }
+
+  function printControls() {
+    const wrap = document.createElement('div');
+    wrap.className = 'readrow';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'readbtn';
+    btn.textContent = '🖨️ Print this book';
+    btn.addEventListener('click', () => { stopReading(); window.open('/books/' + bookId + '/print', '_blank'); });
+    wrap.appendChild(btn);
+    return wrap;
   }
 
   // --- Clone from the library --------------------------------------------------
