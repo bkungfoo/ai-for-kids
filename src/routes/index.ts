@@ -4,7 +4,7 @@ import { currentUniverse, currentUser, experimentalEligible, experimentalState, 
 import { analyticsMiddleware } from '../analytics/middleware.js';
 import { appendEvent } from '../analytics/store.js';
 import { activityForPage } from '../analytics/classify.js';
-import { buildSummary } from '../analytics/summary.js';
+import { buildSummary, buildSeries, type SeriesMetric } from '../analytics/summary.js';
 import { claudeCodeProvider } from '../providers/claudeCode.js';
 import { elevenLabsProvider } from '../providers/elevenlabs.js';
 import { geminiProvider } from '../providers/gemini.js';
@@ -63,6 +63,23 @@ router.post('/v1/analytics/ping', (req: Request, res: Response) => {
   });
   res.json({ ok: true });
 });
+
+// Time series for the dashboard's line chart: ONE measure, split into
+// same-unit series (never two y-scales), bucketed at the requested window.
+router.get(
+  '/v1/analytics/series',
+  asyncHandler(async (req, res) => {
+    if (!experimentalEligible(req)) {
+      res.status(404).json({ ok: false, error: 'Not found' });
+      return;
+    }
+    const days = Math.min(90, Math.max(1, Number(req.query.days) || 14));
+    const bucket = Math.min(86400, Math.max(600, Number(req.query.bucket) || 3600));
+    const allowed = ['events', 'genai', 'engaged', 'blocked', 'users'];
+    const metric = (allowed.includes(String(req.query.metric)) ? req.query.metric : 'genai') as SeriesMetric;
+    res.json({ ok: true, ...(await buildSeries(days, bucket, metric)) });
+  }),
+);
 
 // The dashboard's data — strictly the primary (HarborHouse) account.
 router.get(

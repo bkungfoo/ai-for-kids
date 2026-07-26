@@ -263,3 +263,79 @@ export async function buildSummary(days: number) {
     signals,
   };
 }
+
+// --- Time series ----------------------------------------------------------------
+// One measure at a time, split into same-unit series (never two y-scales).
+
+export type SeriesMetric = 'events' | 'genai' | 'engaged' | 'blocked' | 'users';
+
+export async function buildSeries(days: number, bucketSec: number, metric: SeriesMetric) {
+  const events = await readEvents(days);
+  const bucketMs = Math.max(60, bucketSec) * 1000;
+  const now = Date.now();
+  const from = now - days * 24 * 60 * 60 * 1000;
+  const startBucket = Math.floor(from / bucketMs) * bucketMs;
+  const endBucket = Math.floor(now / bucketMs) * bucketMs;
+
+  const buckets: number[] = [];
+  for (let t = startBucket; t <= endBucket; t += bucketMs) buckets.push(t);
+  const index = new Map(buckets.map((t, i) => [t, i]));
+  const bucketOf = (t: number) => index.get(Math.floor(t / bucketMs) * bucketMs);
+
+  const series = new Map<string, number[]>();
+  const row = (name: string) => {
+    let r = series.get(name);
+    if (!r) series.set(name, (r = new Array(buckets.length).fill(0)));
+    return r;
+  };
+
+  if (metric === 'users') {
+    // Distinct users per bucket — a set per bucket, then sizes.
+    const sets = buckets.map(() => new Set<string>());
+    for (const e of events) {
+      if (e.auto) continue;
+      const i = bucketOf(e.t);
+      if (i !== undefined) sets[i]!.add(e.user);
+    }
+    series.set('active users', sets.map((s) => s.size));
+  } else if (metric === 'engaged') {
+    // Engaged minutes, credited the same way sessions are (idle-limit capped).
+    for (const s of buildSessions(events)) {
+      for (let i = 0; i < s.events.length; i++) {
+        const e = s.events[i]!;
+        const creditMs = Math.min(
+          i < s.events.length - 1 ? s.events[i + 1]!.t - e.t : TAIL_CREDIT_MS,
+          IDLE_LIMIT_MS,
+        );
+        const bi = bucketOf(e.t);
+        if (bi !== undefined) row(e.activity)[bi]! += creditMs / 60000;
+      }
+    }
+  } else {
+    for (const e of events) {
+      if (e.kind !== 'api') continue;
+      if (metric === 'genai' && !e.tool) continue;
+      if (metric === 'blocked' && !e.blocked) continue;
+      if (metric === 'events' && e.auto) continue;
+      const i = bucketOf(e.t);
+      if (i !== undefined) row(e.activity)[i]! += 1;
+    }
+  }
+
+  // Fixed series order = fixed color slots (color follows the entity, not rank).
+  const ORDER = ['storybook', 'music', 'voices', 'site', 'code', 'images', 'active users'];
+  const named = [...series.entries()]
+    .filter(([, vals]) => vals.some((v) => v > 0))
+    .sort((a, b) => {
+      const ai = ORDER.indexOf(a[0]);
+      const bi = ORDER.indexOf(b[0]);
+      return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+    })
+    .map(([name, values]) => ({
+      name,
+      slot: Math.max(0, ORDER.indexOf(name)),
+      values: values.map((v) => Math.round(v * 100) / 100),
+    }));
+
+  return { bucketSec: bucketMs / 1000, buckets, metric, series: named };
+}
