@@ -2,13 +2,20 @@ import { Router, type Request, type Response } from 'express';
 import { requirePageAuth } from '../middleware/requireAuth.js';
 
 /**
- * Printable storybook: landscape, double-sided, TWO square book pages per side.
- * Each square carries a dotted cut outline and reads like the on-screen book —
- * words on the left half, picture on the right — with the binding margin inside
- * its left edge. Squares sit at identical positions on the front and back of a
- * sheet, so one cut yields a leaf with a page on each side; cut-and-stack
- * ordering (books/imposition.ts) means the left pile stacked on the right pile
- * is the finished book.
+ * Printable storybook.
+ *
+ * BOOK PAGE = one page of the finished book; it holds EITHER words OR a
+ * picture, never both. The sequence is: cover, authors, illustrators, then for
+ * every story page a words page followed by its picture page, then The End.
+ * Because the words land on even book pages and the pictures on odd ones, an
+ * assembled book opens to words on the left and the matching picture on the
+ * right — exactly how the reader shows it.
+ *
+ * PRINTING PAGE = one side of a sheet of paper, and always carries TWO book
+ * pages side by side, each inside a dotted square to cut out. Squares sit at
+ * identical positions on the front and back, so one cut yields a leaf with a
+ * book page on each side; cut-and-stack ordering (books/imposition.ts) means
+ * the left pile stacked on the right pile is the finished book.
  */
 export const printPagesRouter = Router();
 
@@ -55,29 +62,23 @@ printPagesRouter.get('/books/:id/print', requirePageAuth, (req: Request, res: Re
   .slot { width: 50%; height: 100%; display: flex; align-items: center; justify-content: center; }
   .bookpage { position: relative; width: 4.9in; height: 4.9in; border: 2px dashed #b9c8d1;
     display: flex; overflow: hidden; background: #fff; }
-  /* Text left, picture right — the same way the book reads on screen. */
-  .half { width: 50%; height: 100%; padding: 0.22in; display: flex; flex-direction: column;
-    overflow: hidden; }
-  /* Binding margin lives INSIDE the square on its left edge, so every cut-out
-     page can be stapled or ring-bound along the same side. */
-  .half.words { padding-left: 0.5in; justify-content: center; }
-  .half.picture { align-items: center; justify-content: center; padding-right: 0.28in; }
-  .gutter { position: absolute; top: 8%; bottom: 8%; left: 50%; width: 0;
-    border-left: 1px dotted #e2e9ee; }
   .cut-hint { position: absolute; bottom: 5px; left: 50%; transform: translateX(-50%);
     font-size: 8.5px; color: #b9c8d1; letter-spacing: .5px; }
   .p-title { font-family: Georgia, 'Times New Roman', serif; font-size: 21px; font-weight: 700;
     text-align: center; margin: 0 0 8px; }
   .p-byline { text-align: center; font-family: Georgia, serif; font-size: 12.5px; color: #5a4632; }
-  .p-img { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
-  .p-img img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
-  .p-text { font-family: Georgia, 'Times New Roman', serif; font-size: 12.5px; line-height: 1.5;
-    white-space: pre-wrap; overflow: hidden; }
-  .p-num { position: absolute; bottom: 5px; left: 0.5in; font-size: 8.5px; color: #9bb0bb; }
-  /* Cover / title / end fill the whole square instead of splitting in half. */
+  /* A book page holds EITHER words OR a picture — each fills its square.
+     The left padding is the binding margin, the same on every page, so the
+     cut-out stack staples or ring-binds cleanly along one edge. */
   .fullpage { width: 100%; height: 100%; padding: 0.3in 0.3in 0.3in 0.5in; display: flex;
-    flex-direction: column; align-items: center; justify-content: center; }
-  .fullpage img { max-width: 100%; max-height: 100%; object-fit: contain; }
+    flex-direction: column; align-items: center; justify-content: center; overflow: hidden; }
+  .fullpage img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
+  .fullpage.picture { padding: 0.22in 0.22in 0.22in 0.42in; }
+  .fullpage.cover { padding: 0.18in; }
+  .p-text { font-family: Georgia, 'Times New Roman', serif; font-size: 17px; line-height: 1.6;
+    white-space: pre-wrap; overflow: hidden; text-align: left; width: 100%; }
+  .p-credit { font-family: Georgia, serif; font-size: 15px; color: #5a4632; text-align: center; }
+  .p-num { position: absolute; bottom: 5px; left: 0.5in; font-size: 8.5px; color: #9bb0bb; }
   .theend { font-family: Georgia, serif; font-size: 26px; }
   .blank { color: #cfd9df; font-size: 10px; margin: auto; }
 
@@ -113,8 +114,8 @@ printPagesRouter.get('/books/:id/print', requirePageAuth, (req: Request, res: Re
         and set <strong>Margins: None</strong> with <strong>Background graphics ON</strong>.</li>
       <li>Match the <em>flip</em> setting above to your printer's two-sided option
         ("flip on short edge" is the usual default). If the backs come out mismatched, switch it and reprint one sheet to check.</li>
-      <li>Cut out each <strong>dotted square</strong> with scissors — two squares per sheet.
-        Each square is one page of your book, with a picture on the back.</li>
+      <li>Cut out each <strong>dotted square</strong> with scissors — two book pages per
+        printed side. Each square is one page of your book, with another page on its back.</li>
       <li>Keep them in two piles as you cut: <strong>left-hand squares</strong> in one pile,
         <strong>right-hand squares</strong> in the other.</li>
       <li>Put the whole <strong>left pile on top of the right pile</strong> —
@@ -155,23 +156,28 @@ function imgTag(image, alt) {
 }
 
 /** Build the printable content for one book page. */
-/** The inside of one square book page. Story pages split words|picture the
- *  same way the reader shows an open book; cover/title/end fill the square. */
+/** The inside of one square BOOK PAGE — words only, or a picture only. */
 function renderPage(p) {
   if (p.kind === 'cover') {
-    return '<div class="fullpage">' + (p.cover ? imgTag(p.cover, p.title) :
-      '<div class="p-title">' + p.title + '</div>') + '</div>';
+    return '<div class="fullpage cover">' +
+      (p.cover ? imgTag(p.cover, p.title) : '<div class="p-title">' + p.title + '</div>') +
+      '</div>';
   }
-  if (p.kind === 'title') {
+  if (p.kind === 'authors') {
     return '<div class="fullpage"><div class="p-title">' + p.title + '</div>' +
       (p.byline ? '<div class="p-byline">' + p.byline + '</div>' : '') + '</div>';
   }
+  if (p.kind === 'illustrators') {
+    return '<div class="fullpage"><div class="p-credit">' + p.credit + '</div></div>';
+  }
   if (p.kind === 'end') return '<div class="fullpage"><div class="theend">✨ The End ✨</div></div>';
-  return '<div class="half words"><div class="p-text">' + (p.text || '') + '</div></div>' +
-    '<div class="half picture">' +
-      (p.image ? '<div class="p-img">' + imgTag(p.image, '') + '</div>' : '') +
-    '</div>' +
-    '<div class="gutter"></div><div class="p-num">' + p.num + '</div>';
+  if (p.kind === 'picture') {
+    return '<div class="fullpage picture">' +
+      (p.image ? imgTag(p.image, '') : '<div class="p-credit">(no picture)</div>') + '</div>';
+  }
+  // words-only page
+  return '<div class="fullpage words"><div class="p-text">' + (p.text || '') + '</div></div>' +
+    '<div class="p-num">' + p.num + '</div>';
 }
 
 function slotHtml(idx, side) {
@@ -196,8 +202,8 @@ function render() {
   });
   host.innerHTML = html;
   document.getElementById('sheetnote').textContent =
-    PAGES.length + ' book pages → ' + sheets.length + ' sheet' + (sheets.length === 1 ? '' : 's') +
-    ' of paper (printed on both sides).';
+    PAGES.length + ' book pages → ' + (sheets.length * 2) + ' printed sides on ' +
+    sheets.length + ' sheet' + (sheets.length === 1 ? '' : 's') + ' of paper (two book pages per side).';
 }
 
 (async () => {
@@ -212,12 +218,22 @@ function render() {
       ? 'Written by ' + (authors.length === 1 ? authors[0] :
           authors.slice(0, -1).join(', ') + ' and ' + authors[authors.length - 1])
       : '';
-    PAGES = [{ kind: 'cover', title: b.title, cover: b.cover },
-             { kind: 'title', title: b.title, byline: byline }];
+    const ENGINES = { replicate: 'Nano Banana Pro', gemini: 'Nano Banana 2' };
+    const illustrator = ENGINES[b.imageEngine] || 'Harbor House AI';
+    // Cover, authors, illustrators, then words+picture per story page, then
+    // The End — words on even book pages, pictures on odd, so a bound copy
+    // opens to words on the left and its picture on the right.
+    PAGES = [
+      { kind: 'cover', title: b.title, cover: b.cover },
+      { kind: 'authors', title: b.title, byline: byline },
+      { kind: 'illustrators', credit: 'Pictures by ' + illustrator },
+    ];
     let n = 1;
     for (const p of b.pages) {
       if (p.isEnd) { PAGES.push({ kind: 'end' }); continue; }
-      PAGES.push({ kind: 'story', text: p.text, image: p.image, num: n++ });
+      const num = n++;
+      PAGES.push({ kind: 'words', text: p.text, num: num });
+      PAGES.push({ kind: 'picture', image: p.image, num: num });
     }
     document.title = b.title + ' — print';
     render();
