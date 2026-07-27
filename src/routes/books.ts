@@ -32,6 +32,7 @@ import {
   updateCoverMusic,
   updateIntroNarration,
   updateNarratorVoice,
+  markNarrationBlocked,
   updatePage,
   pageMusicFile,
   savePageMusicAudio,
@@ -715,8 +716,13 @@ function warmNarration(bookId: string, pageIndex: number, text: string): Promise
     try {
       const forBook = await getBook(bookId);
       if (!forBook) return;
-      const { narration } = await synthesizeNarrationFor(forBook, text);
-      if (!narration) return; // engine unconfigured / blocked — nothing to warm
+      const { outcome, narration } = await synthesizeNarrationFor(forBook, text);
+      if (!narration) {
+        // Moderation refused these words: remember it, so the reader's
+        // readiness check doesn't wait forever for an impossible recording.
+        if (outcome.status === 403) await markNarrationBlocked(bookId, pageIndex);
+        return;
+      }
       const book = await getBook(bookId);
       const page = book?.pages[pageIndex];
       if (!book || !page || page.text !== text) return; // page changed/moved meanwhile
@@ -748,8 +754,11 @@ function warmIntroNarration(bookId: string): Promise<void> {
       const book = await getBook(bookId);
       if (!book) return;
       const text = introText(book);
-      const { narration } = await synthesizeNarrationFor(book, text);
-      if (!narration) return;
+      const { outcome, narration } = await synthesizeNarrationFor(book, text);
+      if (!narration) {
+        if (outcome.status === 403) await markNarrationBlocked(bookId, null);
+        return;
+      }
       const fresh = await getBook(bookId);
       if (!fresh || introText(fresh) !== text) return; // authors changed meanwhile
       if (fresh.introNarration && fresh.introNarration.key === narrationKeyFor(fresh)) return;
@@ -785,6 +794,7 @@ booksApiRouter.post(
     }
     const { outcome, narration } = await synthesizeNarrationFor(book, introText(book));
     if (!narration) {
+      if (outcome.status === 403) await markNarrationBlocked(bookId, null);
       res.status(outcome.status).json(outcome.body);
       return;
     }
@@ -825,6 +835,7 @@ booksApiRouter.post(
     // back to the browser's built-in speech synthesis.
     const { outcome, narration } = await synthesizeNarrationFor(book, page.text);
     if (!narration) {
+      if (outcome.status === 403) await markNarrationBlocked(bookId, index);
       res.status(outcome.status).json(outcome.body);
       return;
     }
@@ -846,19 +857,24 @@ booksApiRouter.get(
     }
     let total = 0;
     let done = 0;
+    let blocked = 0;
     for (const page of book.pages) {
       if (!page.text) continue; // nothing to read aloud on this page
       total += 1;
       if (validNarration(book, page)) done += 1;
+      // Words moderation refuses can never be recorded — count them as
+      // settled so the reader never waits forever for them.
+      else if (page.narrationBlocked) { done += 1; blocked += 1; }
     }
     // The cover intro (title + authors) is always spoken, so it counts too.
     const introReady = !!(book.introNarration && book.introNarration.key === narrationKeyFor(book));
     total += 1;
     if (introReady) done += 1;
+    else if (book.introNarrationBlocked) { done += 1; blocked += 1; }
     // With no engine configured there's nothing to generate or wait for — the
     // reader uses the browser's own voice — so report ready to skip the dialog.
     const configured = narrationConfigured();
-    res.json({ ok: true, ready: !configured || done >= total, configured, total, done, introReady });
+    res.json({ ok: true, ready: !configured || done >= total, configured, total, done, blocked, introReady });
   }),
 );
 
@@ -884,9 +900,14 @@ booksApiRouter.post(
     // is already recorded (e.g. a second reader opened the same book).
     const pending: Array<() => Promise<void>> = [];
     book.pages.forEach((page, index) => {
-      if (page.text && !validNarration(book, page)) pending.push(() => warmNarration(bookId, index, page.text));
+      if (page.text && !page.narrationBlocked && !validNarration(book, page)) {
+        pending.push(() => warmNarration(bookId, index, page.text));
+      }
     });
-    if (!(book.introNarration && book.introNarration.key === narrationKeyFor(book))) {
+    if (
+      !book.introNarrationBlocked &&
+      !(book.introNarration && book.introNarration.key === narrationKeyFor(book))
+    ) {
       pending.push(() => warmIntroNarration(bookId));
     }
     void (async () => {

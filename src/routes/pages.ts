@@ -3579,7 +3579,12 @@ function readerClientJs(): string {
         if (dlg) { dlg.close(); dlg = null; progress = null; }
         // Only announce (and reload for instant playback) if the child actually
         // had to wait — a book that was ready all along stays quiet.
-        if (waited) { await hydrate(); setStatus('🎙️ The voices are ready — press “Read to me” to listen!'); }
+        if (waited) {
+          await hydrate();
+          setStatus(st.blocked
+            ? '🎙️ The voices are ready! (' + st.blocked + ' part could not be recorded — the words there need changing.)'
+            : '🎙️ The voices are ready — press “Read to me” to listen!');
+        }
         return true;
       }
       waited = true;
