@@ -1,21 +1,20 @@
 /**
- * Cut-and-stack imposition for printing a storybook.
+ * Saddle-stitch (booklet) imposition for printing a storybook.
  *
- * The sheet model: LANDSCAPE paper, DOUBLE-SIDED, two book pages side by side
- * per side with a gap down the middle. After printing you cut every sheet
- * along that middle line, giving two half-sheet "leaves" per sheet — each leaf
- * carrying one book page on its front and the next on its back. Stack the
- * left-hand pile on top of the right-hand pile and the book is in order, ready
- * to staple or ring-bind along the left edge.
+ * The assembly model: LANDSCAPE paper, DOUBLE-SIDED, two book pages side by
+ * side per printed side. Print every sheet, keep the stack in order, fold the
+ * WHOLE stack in half along the short edge, and the booklet reads 1, 2, 3…
+ * from the front — no cutting or collating.
  *
- * That stacking works because of how leaves are assigned: with S sheets, the
- * LEFT slot of sheet k carries leaf k and the RIGHT slot carries leaf S+k. So
- * the left pile is leaves 1..S in order and the right pile continues S+1..2S.
+ * That means page 1 must sit on the RIGHT half of the first sheet's front (it
+ * becomes the front cover when folded) and the last page on its LEFT half (the
+ * back cover). Each sheet inward carries the next pages in, and the innermost
+ * sheet holds the middle of the book. Page count is padded to a multiple of 4,
+ * since one folded sheet always yields four book pages.
  *
- * Duplex flip: printers either preserve left/right on the back ("long edge"
- * for landscape) or mirror it ("short edge"). Both are supported — the back
- * slots are swapped for the mirroring case — because we cannot know the
- * user's printer.
+ * Duplex flip: printers either mirror left/right on the back ("flip on short
+ * edge", the usual landscape default — which is what the classic formula
+ * assumes) or preserve it ("long edge"). Both are supported.
  */
 
 export interface SheetSide {
@@ -32,24 +31,24 @@ export interface Sheet {
 export type FlipMode = 'long' | 'short';
 
 /**
- * Impose `pageCount` book pages onto landscape 2-up duplex sheets.
- * `flip: 'short'` mirrors the back side's slots (the common "flip on short
- * edge" behavior for landscape duplex).
+ * Impose `pageCount` book pages onto landscape 2-up duplex sheets for folding.
+ * `flip: 'long'` mirrors the back side's slots for printers that preserve
+ * left/right across a landscape duplex flip.
  */
 export function imposeSheets(pageCount: number, flip: FlipMode = 'short'): Sheet[] {
   if (pageCount <= 0) return [];
-  const leaves = Math.ceil(pageCount / 2); // each leaf = 2 pages (front + back)
-  const sheets = Math.ceil(leaves / 2); // each sheet = 2 leaves (left + right)
+  const padded = Math.ceil(pageCount / 4) * 4; // a folded sheet = 4 book pages
+  const sheets = padded / 4;
   const at = (i: number): number | null => (i < pageCount ? i : null);
 
   const out: Sheet[] = [];
   for (let k = 0; k < sheets; k++) {
-    const leftLeaf = k; // leaves 0..S-1 land in the left slot, in order
-    const rightLeaf = sheets + k; // leaves S..2S-1 continue in the right slot
-    const front: SheetSide = { left: at(leftLeaf * 2), right: at(rightLeaf * 2) };
-    const backNatural: SheetSide = { left: at(leftLeaf * 2 + 1), right: at(rightLeaf * 2 + 1) };
+    // Outermost sheet (k = 0) carries the first and last pages; each sheet
+    // inward steps one page in from each end.
+    const front: SheetSide = { left: at(padded - 1 - 2 * k), right: at(2 * k) };
+    const backNatural: SheetSide = { left: at(2 * k + 1), right: at(padded - 2 - 2 * k) };
     const back: SheetSide =
-      flip === 'short' ? { left: backNatural.right, right: backNatural.left } : backNatural;
+      flip === 'long' ? { left: backNatural.right, right: backNatural.left } : backNatural;
     out.push({ front, back });
   }
   return out;

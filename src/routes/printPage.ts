@@ -12,10 +12,10 @@ import { requirePageAuth } from '../middleware/requireAuth.js';
  * right — exactly how the reader shows it.
  *
  * PRINTING PAGE = one side of a sheet of paper, and always carries TWO book
- * pages side by side, each inside a dotted square to cut out. Squares sit at
- * identical positions on the front and back, so one cut yields a leaf with a
- * book page on each side; cut-and-stack ordering (books/imposition.ts) means
- * the left pile stacked on the right pile is the finished book.
+ * pages side by side, each inside a dotted border. Sheets use saddle-stitch
+ * ordering (books/imposition.ts): print them all, keep the stack in order,
+ * fold the whole stack in half along the short edge, and the booklet reads
+ * 1, 2, 3… from the front — no cutting or collating.
  */
 export const printPagesRouter = Router();
 
@@ -63,22 +63,32 @@ printPagesRouter.get('/books/:id/print', requirePageAuth, (req: Request, res: Re
   .bookpage { position: relative; width: 4.9in; height: 4.9in; border: 2px dashed #b9c8d1;
     display: flex; overflow: hidden; background: #fff; }
   .cut-hint { position: absolute; bottom: 5px; left: 50%; transform: translateX(-50%);
-    font-size: 8.5px; color: #b9c8d1; letter-spacing: .5px; }
+    font-size: 8.5px; color: #c8d4db; letter-spacing: .5px; }
+  /* The fold runs down the middle of every sheet — the crease that turns the
+     stack into a booklet. */
+  .foldline { position: absolute; top: 0; bottom: 0; left: 50%; width: 0;
+    border-left: 1px dashed #d6e0e6; }
+  .fold-hint { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(90deg);
+    font-size: 8.5px; color: #c8d4db; letter-spacing: 2px; background: #fff; padding: 0 4px; }
   .p-title { font-family: Georgia, 'Times New Roman', serif; font-size: 21px; font-weight: 700;
     text-align: center; margin: 0 0 8px; }
   .p-byline { text-align: center; font-family: Georgia, serif; font-size: 12.5px; color: #5a4632; }
   /* A book page holds EITHER words OR a picture — each fills its square.
      The left padding is the binding margin, the same on every page, so the
      cut-out stack staples or ring-binds cleanly along one edge. */
-  .fullpage { width: 100%; height: 100%; padding: 0.3in 0.3in 0.3in 0.5in; display: flex;
+  .fullpage { width: 100%; height: 100%; padding: 0.3in; display: flex;
     flex-direction: column; align-items: center; justify-content: center; overflow: hidden; }
+  /* Extra breathing room beside the fold (the book's gutter): the left page's
+     inner edge is on its right, the right page's inner edge is on its left. */
+  .slot.left .fullpage { padding-right: 0.45in; }
+  .slot.right .fullpage { padding-left: 0.45in; }
   .fullpage img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
   .fullpage.picture { padding: 0.22in 0.22in 0.22in 0.42in; }
   .fullpage.cover { padding: 0.18in; }
   .p-text { font-family: Georgia, 'Times New Roman', serif; font-size: 17px; line-height: 1.6;
     white-space: pre-wrap; overflow: hidden; text-align: left; width: 100%; }
   .p-credit { font-family: Georgia, serif; font-size: 15px; color: #5a4632; text-align: center; }
-  .p-num { position: absolute; bottom: 5px; left: 0.5in; font-size: 8.5px; color: #9bb0bb; }
+  .p-num { position: absolute; bottom: 5px; left: 0.3in; font-size: 8.5px; color: #9bb0bb; }
   .theend { font-family: Georgia, serif; font-size: 26px; }
   .blank { color: #cfd9df; font-size: 10px; margin: auto; }
 
@@ -114,14 +124,11 @@ printPagesRouter.get('/books/:id/print', requirePageAuth, (req: Request, res: Re
         and set <strong>Margins: None</strong> with <strong>Background graphics ON</strong>.</li>
       <li>Match the <em>flip</em> setting above to your printer's two-sided option
         ("flip on short edge" is the usual default). If the backs come out mismatched, switch it and reprint one sheet to check.</li>
-      <li>Cut out each <strong>dotted square</strong> with scissors — two book pages per
-        printed side. Each square is one page of your book, with another page on its back.</li>
-      <li>Keep them in two piles as you cut: <strong>left-hand squares</strong> in one pile,
-        <strong>right-hand squares</strong> in the other.</li>
-      <li>Put the whole <strong>left pile on top of the right pile</strong> —
-        that's your book, already in order.</li>
-      <li>Staple or add binder rings along the <strong>left edge</strong> (the wide margin
-        inside each square).</li>
+      <li>Keep the printed sheets <strong>in the order they came out</strong> — don't shuffle them.</li>
+      <li><strong>Fold the whole stack in half</strong> along the dotted FOLD line down the
+        middle (a short-edge fold). Your book now reads in order from the front cover.</li>
+      <li>Staple or add binder rings <strong>along the fold</strong>.</li>
+      <li>Optional: trim around each page's dotted border for neat square pages.</li>
     </ol>
     <p class="note" id="sheetnote"></p>
   </div>
@@ -131,18 +138,19 @@ printPagesRouter.get('/books/:id/print', requirePageAuth, (req: Request, res: Re
 <script>
 const BOOK_ID = ${JSON.stringify(bookId)};
 
-/** Same imposition as src/books/imposition.ts (kept in sync deliberately). */
+/** Saddle-stitch imposition — same as src/books/imposition.ts (kept in sync
+ *  deliberately). Page 1 lands on the RIGHT of the first sheet's front, so
+ *  folding the printed stack in half gives a booklet that reads in order. */
 function imposeSheets(pageCount, flip) {
   if (pageCount <= 0) return [];
-  const leaves = Math.ceil(pageCount / 2);
-  const sheets = Math.ceil(leaves / 2);
+  const padded = Math.ceil(pageCount / 4) * 4;
+  const sheets = padded / 4;
   const at = (i) => (i < pageCount ? i : null);
   const out = [];
   for (let k = 0; k < sheets; k++) {
-    const leftLeaf = k, rightLeaf = sheets + k;
-    const front = { left: at(leftLeaf * 2), right: at(rightLeaf * 2) };
-    const bn = { left: at(leftLeaf * 2 + 1), right: at(rightLeaf * 2 + 1) };
-    const back = flip === 'short' ? { left: bn.right, right: bn.left } : bn;
+    const front = { left: at(padded - 1 - 2 * k), right: at(2 * k) };
+    const bn = { left: at(2 * k + 1), right: at(padded - 2 - 2 * k) };
+    const back = flip === 'long' ? { left: bn.right, right: bn.left } : bn;
     out.push({ front, back });
   }
   return out;
@@ -184,7 +192,7 @@ function slotHtml(idx, side) {
   const cls = 'slot ' + side;
   if (idx === null || !PAGES[idx]) return '<div class="' + cls + '"></div>';
   return '<div class="' + cls + '"><div class="bookpage">' + renderPage(PAGES[idx]) +
-    '<div class="cut-hint">✂ cut along the dotted square</div></div></div>';
+    '<div class="cut-hint">page border — trim here if you like</div></div></div>';
 }
 
 function render() {
@@ -197,13 +205,14 @@ function render() {
       html += '<div class="sheet">' +
         '<div class="side-label">sheet ' + (i + 1) + ' — ' + name + '</div>' +
         slotHtml(side.left, 'left') + slotHtml(side.right, 'right') +
+        '<div class="foldline"></div><div class="fold-hint">FOLD</div>' +
         '</div>';
     }
   });
   host.innerHTML = html;
   document.getElementById('sheetnote').textContent =
-    PAGES.length + ' book pages → ' + (sheets.length * 2) + ' printed sides on ' +
-    sheets.length + ' sheet' + (sheets.length === 1 ? '' : 's') + ' of paper (two book pages per side).';
+    PAGES.length + ' book pages → ' + sheets.length + ' sheet' + (sheets.length === 1 ? '' : 's') +
+    ' of paper, printed on both sides, folded together into a booklet.';
 }
 
 (async () => {
