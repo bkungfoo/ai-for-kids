@@ -2,10 +2,13 @@ import { Router, type Request, type Response } from 'express';
 import { requirePageAuth } from '../middleware/requireAuth.js';
 
 /**
- * Printable storybook: landscape, double-sided, two pages per side with a
- * middle gap for stapling / binder rings, dotted cut lines, and cut-and-stack
- * page ordering (see books/imposition.ts) so the cut halves assemble into a
- * book by simply putting the left pile on the right pile.
+ * Printable storybook: landscape, double-sided, TWO square book pages per side.
+ * Each square carries a dotted cut outline and reads like the on-screen book —
+ * words on the left half, picture on the right — with the binding margin inside
+ * its left edge. Squares sit at identical positions on the front and back of a
+ * sheet, so one cut yields a leaf with a page on each side; cut-and-stack
+ * ordering (books/imposition.ts) means the left pile stacked on the right pile
+ * is the finished book.
  */
 export const printPagesRouter = Router();
 
@@ -46,29 +49,36 @@ printPagesRouter.get('/books/:id/print', requirePageAuth, (req: Request, res: Re
     box-shadow: 0 6px 20px rgba(16,42,54,.18); display: flex; overflow: hidden; }
   .side-label { position: absolute; top: 4px; left: 50%; transform: translateX(-50%);
     font-size: 10px; color: #9bb0bb; letter-spacing: .5px; }
-  .slot { width: 50%; height: 100%; padding: 0.45in; display: flex; flex-direction: column;
+  /* Each slot centers ONE square book page. The square is what the child cuts
+     out; front and back of a sheet place their squares identically, so one cut
+     yields a leaf with a page on each side. */
+  .slot { width: 50%; height: 100%; display: flex; align-items: center; justify-content: center; }
+  .bookpage { position: relative; width: 4.9in; height: 4.9in; border: 2px dashed #b9c8d1;
+    display: flex; overflow: hidden; background: #fff; }
+  /* Text left, picture right — the same way the book reads on screen. */
+  .half { width: 50%; height: 100%; padding: 0.22in; display: flex; flex-direction: column;
     overflow: hidden; }
-  /* Binding margin: the left slot binds on the sheet's left edge, the right
-     slot binds on the middle gap — so after cutting, every leaf has its
-     binding margin on the same side. */
-  .slot.left { padding-left: 0.85in; padding-right: 0.35in; }
-  .slot.right { padding-left: 0.85in; padding-right: 0.35in; }
-  .cutline { position: absolute; top: 0; bottom: 0; left: 50%; width: 0;
-    border-left: 2px dashed #b9c8d1; }
-  .cut-hint { position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
-    font-size: 9px; color: #b9c8d1; background: #fff; padding: 0 6px; letter-spacing: .5px; }
-  .p-title { font-family: Georgia, 'Times New Roman', serif; font-size: 26px; font-weight: 700;
-    text-align: center; margin: 0 0 10px; }
-  .p-byline { text-align: center; font-family: Georgia, serif; font-size: 14px; color: #5a4632; }
-  .p-img { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
-  .p-img img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
-  .p-text { font-family: Georgia, 'Times New Roman', serif; font-size: 15px; line-height: 1.55;
-    margin-top: 10px; white-space: pre-wrap; }
-  .p-num { text-align: center; font-size: 10px; color: #9bb0bb; margin-top: 6px; }
-  .cover-art { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
-  .cover-art img { max-width: 100%; max-height: 100%; object-fit: contain; }
-  .theend { flex: 1; display: flex; align-items: center; justify-content: center;
-    font-family: Georgia, serif; font-size: 30px; }
+  /* Binding margin lives INSIDE the square on its left edge, so every cut-out
+     page can be stapled or ring-bound along the same side. */
+  .half.words { padding-left: 0.5in; justify-content: center; }
+  .half.picture { align-items: center; justify-content: center; padding-right: 0.28in; }
+  .gutter { position: absolute; top: 8%; bottom: 8%; left: 50%; width: 0;
+    border-left: 1px dotted #e2e9ee; }
+  .cut-hint { position: absolute; bottom: 5px; left: 50%; transform: translateX(-50%);
+    font-size: 8.5px; color: #b9c8d1; letter-spacing: .5px; }
+  .p-title { font-family: Georgia, 'Times New Roman', serif; font-size: 21px; font-weight: 700;
+    text-align: center; margin: 0 0 8px; }
+  .p-byline { text-align: center; font-family: Georgia, serif; font-size: 12.5px; color: #5a4632; }
+  .p-img { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+  .p-img img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
+  .p-text { font-family: Georgia, 'Times New Roman', serif; font-size: 12.5px; line-height: 1.5;
+    white-space: pre-wrap; overflow: hidden; }
+  .p-num { position: absolute; bottom: 5px; left: 0.5in; font-size: 8.5px; color: #9bb0bb; }
+  /* Cover / title / end fill the whole square instead of splitting in half. */
+  .fullpage { width: 100%; height: 100%; padding: 0.3in 0.3in 0.3in 0.5in; display: flex;
+    flex-direction: column; align-items: center; justify-content: center; }
+  .fullpage img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .theend { font-family: Georgia, serif; font-size: 26px; }
   .blank { color: #cfd9df; font-size: 10px; margin: auto; }
 
   /* --- print -------------------------------------------------------------- */
@@ -103,10 +113,14 @@ printPagesRouter.get('/books/:id/print', requirePageAuth, (req: Request, res: Re
         and set <strong>Margins: None</strong> with <strong>Background graphics ON</strong>.</li>
       <li>Match the <em>flip</em> setting above to your printer's two-sided option
         ("flip on short edge" is the usual default). If the backs come out mismatched, switch it and reprint one sheet to check.</li>
-      <li>Cut every sheet along the <strong>dotted line</strong> down the middle.</li>
-      <li>Put the whole <strong>left-hand pile on top of the right-hand pile</strong> —
+      <li>Cut out each <strong>dotted square</strong> with scissors — two squares per sheet.
+        Each square is one page of your book, with a picture on the back.</li>
+      <li>Keep them in two piles as you cut: <strong>left-hand squares</strong> in one pile,
+        <strong>right-hand squares</strong> in the other.</li>
+      <li>Put the whole <strong>left pile on top of the right pile</strong> —
         that's your book, already in order.</li>
-      <li>Staple or add binder rings along the <strong>left edge</strong> (the wide margin).</li>
+      <li>Staple or add binder rings along the <strong>left edge</strong> (the wide margin
+        inside each square).</li>
     </ol>
     <p class="note" id="sheetnote"></p>
   </div>
@@ -141,26 +155,30 @@ function imgTag(image, alt) {
 }
 
 /** Build the printable content for one book page. */
+/** The inside of one square book page. Story pages split words|picture the
+ *  same way the reader shows an open book; cover/title/end fill the square. */
 function renderPage(p) {
   if (p.kind === 'cover') {
-    return '<div class="cover-art">' + (p.cover ? imgTag(p.cover, p.title) :
+    return '<div class="fullpage">' + (p.cover ? imgTag(p.cover, p.title) :
       '<div class="p-title">' + p.title + '</div>') + '</div>';
   }
   if (p.kind === 'title') {
-    return '<div style="margin:auto;text-align:center">' +
-      '<div class="p-title">' + p.title + '</div>' +
+    return '<div class="fullpage"><div class="p-title">' + p.title + '</div>' +
       (p.byline ? '<div class="p-byline">' + p.byline + '</div>' : '') + '</div>';
   }
-  if (p.kind === 'end') return '<div class="theend">✨ The End ✨</div>';
-  return (p.image ? '<div class="p-img">' + imgTag(p.image, '') + '</div>' : '') +
-    (p.text ? '<div class="p-text">' + p.text + '</div>' : '') +
-    '<div class="p-num">' + p.num + '</div>';
+  if (p.kind === 'end') return '<div class="fullpage"><div class="theend">✨ The End ✨</div></div>';
+  return '<div class="half words"><div class="p-text">' + (p.text || '') + '</div></div>' +
+    '<div class="half picture">' +
+      (p.image ? '<div class="p-img">' + imgTag(p.image, '') + '</div>' : '') +
+    '</div>' +
+    '<div class="gutter"></div><div class="p-num">' + p.num + '</div>';
 }
 
 function slotHtml(idx, side) {
   const cls = 'slot ' + side;
-  if (idx === null || !PAGES[idx]) return '<div class="' + cls + '"><div class="blank">(blank)</div></div>';
-  return '<div class="' + cls + '">' + renderPage(PAGES[idx]) + '</div>';
+  if (idx === null || !PAGES[idx]) return '<div class="' + cls + '"></div>';
+  return '<div class="' + cls + '"><div class="bookpage">' + renderPage(PAGES[idx]) +
+    '<div class="cut-hint">✂ cut along the dotted square</div></div></div>';
 }
 
 function render() {
@@ -173,7 +191,6 @@ function render() {
       html += '<div class="sheet">' +
         '<div class="side-label">sheet ' + (i + 1) + ' — ' + name + '</div>' +
         slotHtml(side.left, 'left') + slotHtml(side.right, 'right') +
-        '<div class="cutline"></div><div class="cut-hint">✂ cut here</div>' +
         '</div>';
     }
   });
