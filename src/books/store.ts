@@ -131,6 +131,9 @@ export interface Book {
   /** Accounts the owner shared EDIT permission with (never the owner itself).
    * Editors can change content but not publish, delete, share, or transfer. */
   editors?: string[];
+  /** Accounts the book was shared with READ-ONLY — they can open and read it
+   * exactly like a library book, but change nothing. */
+  viewers?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -314,23 +317,33 @@ export async function cloneBook(id: string, owner: string | undefined): Promise<
   return copy;
 }
 
-/** Share edit permission with another account (idempotent). */
-export async function addEditor(id: string, username: string): Promise<Book | undefined> {
+/** Share the book with another account, as an editor or a read-only viewer.
+ * Idempotent, and moving someone between roles just re-shares them. */
+export async function shareBook(
+  id: string,
+  username: string,
+  canEdit: boolean,
+): Promise<Book | undefined> {
   const book = await getBook(id);
   if (!book) return undefined;
   const editors = new Set(book.editors ?? []);
-  if (username !== book.owner) editors.add(username);
+  const viewers = new Set(book.viewers ?? []);
+  editors.delete(username);
+  viewers.delete(username);
+  if (username !== book.owner) (canEdit ? editors : viewers).add(username);
   book.editors = [...editors];
+  book.viewers = [...viewers];
   book.updatedAt = new Date().toISOString();
   await save(book);
   return book;
 }
 
-/** Take an account's edit permission away. */
-export async function removeEditor(id: string, username: string): Promise<Book | undefined> {
+/** Stop sharing with an account entirely (either role). */
+export async function removeShare(id: string, username: string): Promise<Book | undefined> {
   const book = await getBook(id);
   if (!book) return undefined;
   book.editors = (book.editors ?? []).filter((e) => e !== username);
+  book.viewers = (book.viewers ?? []).filter((v) => v !== username);
   book.updatedAt = new Date().toISOString();
   await save(book);
   return book;
@@ -346,6 +359,7 @@ export async function transferBook(id: string, newOwner: string): Promise<Book |
   editors.delete(newOwner);
   book.owner = newOwner;
   book.editors = [...editors];
+  book.viewers = (book.viewers ?? []).filter((v) => v !== newOwner);
   book.updatedAt = new Date().toISOString();
   await save(book);
   return book;

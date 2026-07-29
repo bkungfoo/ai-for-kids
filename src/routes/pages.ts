@@ -627,7 +627,7 @@ const BOOK_TILE_JS = `
       const shared = document.createElement('span');
       shared.style.cssText = 'display:inline-block;font-size:11px;font-weight:700;color:#2c6e8f;' +
         'background:#dcebf1;border-radius:999px;padding:2px 8px;margin-bottom:4px;';
-      shared.textContent = '👥 Shared by ' + b.sharedBy;
+      shared.textContent = '👥 Shared by ' + b.sharedBy + (b.readOnly ? ' (read only)' : '');
       meta.appendChild(shared);
     }
     const t = document.createElement('div');
@@ -1027,6 +1027,14 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         /* While composing, the line stands where the music buttons were —
            centered like every other row on the page. */
         .musicstack .music-working { justify-content: center; font-size: 13px; }
+        /* Sharing roles + the publish warning */
+        .shareopt { display: flex; align-items: center; gap: 8px; margin-top: 12px;
+          font-size: 14px; font-weight: 600; color: #3d2f1e; cursor: pointer; }
+        .shareopt input { width: 16px; height: 16px; accent-color: #2c6e8f; cursor: pointer; }
+        .sharehint { font-size: 12.5px; color: #6b5d43; margin: 4px 0 2px 24px; }
+        .publishwarn { text-align: center; }
+        .publishwarn .pw-icon { font-size: 38px; }
+        .publishwarn p { font-size: 14px; line-height: 1.55; color: #3d2f1e; margin: 8px 0; }
         /* Narrator voice picker + per-page retakes */
         .readbtn.voice-btn { background: #efe9f7; border-color: #a58bc9; }
         .voicepick { max-height: 46vh; overflow-y: auto; }
@@ -1867,6 +1875,10 @@ function readerClientJs(): string {
   // Every page's action buttons are placed through this one cluster, so
   // vertical spacing between rows comes from the same shared rules on every
   // page (cover included). Falsy rows are skipped.
+  function escapeHtml(x) {
+    return String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
   function actionCluster(rows, extraClass) {
     const box = document.createElement('div');
     box.className = 'actions' + (extraClass ? ' ' + extraClass : '');
@@ -2660,6 +2672,19 @@ function readerClientJs(): string {
     addRow.appendChild(add);
     modal.appendChild(addRow);
 
+    // Read-only by default: sharing shows the book, editing is the extra step.
+    const editRow = document.createElement('label');
+    editRow.className = 'shareopt';
+    const editBox = document.createElement('input');
+    editBox.type = 'checkbox';
+    editRow.appendChild(editBox);
+    editRow.appendChild(document.createTextNode(' Let them change the book too'));
+    modal.appendChild(editRow);
+    const editHint = document.createElement('div');
+    editHint.className = 'sharehint';
+    editHint.textContent = 'Leave this unchecked and they can only read your book, like a library book.';
+    modal.appendChild(editHint);
+
     const doneRow = document.createElement('div');
     doneRow.className = 'music-actions';
     const done = document.createElement('button');
@@ -2684,17 +2709,33 @@ function readerClientJs(): string {
     function redraw() {
       list.innerHTML = '';
       const editors = book.editors || [];
+      const viewers = book.viewers || [];
+      const shared = [
+        ...editors.map((n) => ({ name: n, canEdit: true })),
+        ...viewers.map((n) => ({ name: n, canEdit: false })),
+      ];
       const label = document.createElement('label');
-      label.textContent = editors.length
-        ? 'These accounts can edit this book too:'
-        : 'No one else can edit this book yet. Share it with a friend’s account!';
+      label.textContent = shared.length
+        ? 'You shared this book with:'
+        : 'You haven’t shared this book yet. Share it with a friend’s account!';
       list.appendChild(label);
-      for (const name of editors) {
+      for (const entry of shared) {
+        const name = entry.name;
         const row = document.createElement('div');
         row.className = 'music-actions';
         const who = document.createElement('span');
         who.style.cssText = 'font-weight:700;flex:1;';
-        who.textContent = '👤 ' + name;
+        who.textContent = '👤 ' + name + (entry.canEdit ? ' — can edit' : ' — can read');
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'linkbtn';
+        toggle.textContent = entry.canEdit ? '👁️ Make read-only' : '✏️ Let them edit';
+        toggle.addEventListener('click', async () => {
+          toggle.disabled = true;
+          const err = await call('/share', { username: name, canEdit: !entry.canEdit });
+          if (err) setStatus(err.text, err.cls);
+          redraw();
+        });
         const crown = document.createElement('button');
         crown.type = 'button';
         crown.className = 'linkbtn';
@@ -2718,6 +2759,7 @@ function readerClientJs(): string {
           redraw();
         });
         row.appendChild(who);
+        row.appendChild(toggle);
         row.appendChild(crown);
         row.appendChild(rm);
         list.appendChild(row);
@@ -2729,7 +2771,7 @@ function readerClientJs(): string {
       const name = nameInput.value.trim();
       if (!name) { setStatus('Type an account name to share with! ✏️', 'blocked'); return; }
       add.disabled = true;
-      const err = await call('/share', { username: name });
+      const err = await call('/share', { username: name, canEdit: editBox.checked });
       add.disabled = false;
       if (err) { setStatus(err.text, err.cls); return; }
       nameInput.value = '';
@@ -3402,23 +3444,60 @@ function readerClientJs(): string {
       pub.className = 'cta publish';
       pub.type = 'button';
       pub.textContent = '📚 Publish to the library';
-      pub.addEventListener('click', async () => {
-        if (!confirm('Publish "' + book.title + '" to the library? Everyone can read it there, and it can no longer be changed.')) return;
-        pub.disabled = true;
-        setStatus('<span class="spinner"></span>Publishing to the library…');
-        try {
-          const res = await fetch('/v1/books/' + bookId + '/publish', { method: 'POST' });
-          const data = await res.json().catch(() => ({}));
-          if (res.ok && data.ok) { location.href = '/library'; return; }
-          const f = friendlyError(res, data);
-          setStatus(f.text, f.cls);
-          pub.disabled = false;
-        } catch {
-          setStatus('Could not reach the server. Check your connection and try again.', 'error');
-          pub.disabled = false;
-        }
-      });
+      pub.addEventListener('click', () => confirmPublish(pub));
       return pub;
+    }
+
+    /** Publishing is public: make sure the child really understands before it
+     *  leaves their shelf. */
+    function confirmPublish(pub) {
+      const dlg = openTaskDialog('📚 Share with everyone?');
+      const warn = document.createElement('div');
+      warn.className = 'publishwarn';
+      warn.innerHTML =
+        '<div class="pw-icon">👀</div>' +
+        '<p><strong>Everyone with a Harbor House account will be able to read ' +
+        '“' + escapeHtml(book.title) + '”.</strong></p>' +
+        '<p>They can open it, read it aloud, and make their own copy of it. ' +
+        'Your name on the cover goes with it.</p>' +
+        '<p>Your book also becomes <strong>locked</strong> — you can’t change the words ' +
+        'or pictures again unless you pull it back off the library.</p>';
+      dlg.modal.appendChild(warn);
+      const actions = document.createElement('div');
+      actions.className = 'music-actions';
+      const go = document.createElement('button');
+      go.type = 'button';
+      go.className = 'cta publish';
+      go.textContent = '📚 Yes, publish it';
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'linkbtn';
+      cancel.textContent = '✕ Not yet';
+      cancel.addEventListener('click', () => { setStatus(''); dlg.close(); });
+      actions.appendChild(go);
+      actions.appendChild(cancel);
+      dlg.modal.appendChild(actions);
+      go.addEventListener('click', async () => {
+        go.disabled = true;
+        dlg.close();
+        await doPublish(pub);
+      });
+    }
+
+    async function doPublish(pub) {
+      pub.disabled = true;
+      setStatus('<span class="spinner"></span>Publishing to the library…');
+      try {
+        const res = await fetch('/v1/books/' + bookId + '/publish', { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) { location.href = '/library'; return; }
+        const f = friendlyError(res, data);
+        setStatus(f.text, f.cls);
+        pub.disabled = false;
+      } catch {
+        setStatus('Could not reach the server. Check your connection and try again.', 'error');
+        pub.disabled = false;
+      }
     }
 
     if (!editMode) {

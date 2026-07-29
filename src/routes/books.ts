@@ -10,7 +10,6 @@ import { runGuardedGeneration } from '../safety/guardedGeneration.js';
 import { guardText, permittedAtLevel } from '../safety/pipeline.js';
 import {
   addPage,
-  addEditor,
   cloneBook,
   createBook,
   deleteBook,
@@ -22,8 +21,9 @@ import {
   movePage,
   publishBook,
   removeEndPage,
-  removeEditor,
+  removeShare,
   revertBook,
+  shareBook,
   snapshotBook,
   transferBook,
   unpublishBook,
@@ -249,7 +249,13 @@ function bookUniverse(book: Book): string {
  * universes never see each other's books. */
 function canReadBook(book: Book, user: string | undefined): boolean {
   if (!user) return false;
-  if (book.owner === user || (book.editors ?? []).includes(user)) return true;
+  if (
+    book.owner === user ||
+    (book.editors ?? []).includes(user) ||
+    (book.viewers ?? []).includes(user)
+  ) {
+    return true;
+  }
   return book.status === 'published' && bookUniverse(book) === (accountUniverse(user) ?? 'harborhouse');
 }
 
@@ -277,10 +283,19 @@ booksApiRouter.get(
     const books = await listBooks();
     // Own books plus ones other accounts shared for editing (flagged so the
     // shelf can badge them).
-    const mine = books.filter((b) => b.owner === user || (b.editors ?? []).includes(user ?? ''));
+    const mine = books.filter(
+      (b) =>
+        b.owner === user ||
+        (b.editors ?? []).includes(user ?? '') ||
+        (b.viewers ?? []).includes(user ?? ''),
+    );
     res.json({
       ok: true,
-      books: mine.map((b) => ({ ...summarize(b), sharedBy: b.owner === user ? undefined : b.owner })),
+      books: mine.map((b) => ({
+        ...summarize(b),
+        sharedBy: b.owner === user ? undefined : b.owner,
+        readOnly: b.owner !== user && !(b.editors ?? []).includes(user ?? ''),
+      })),
     });
   }),
 );
@@ -418,6 +433,7 @@ booksApiRouter.get(
     const user = currentUser(req);
     const isOwner = !!book && book.owner === user;
     const isEditor = !!book && !!user && (book.editors ?? []).includes(user);
+    const isViewer = !!book && !!user && (book.viewers ?? []).includes(user);
     if (!book || !canReadBook(book, user)) {
       res.status(404).json({ ok: false, error: 'Book not found' });
       return;
@@ -432,7 +448,7 @@ booksApiRouter.get(
     }
     // `mine` lets the reader offer owner-only actions (e.g. unpublish) even on
     // published books, which anyone signed in may read.
-    res.json({ ok: true, book, mine: isOwner, canEdit: isOwner || isEditor });
+    res.json({ ok: true, book, mine: isOwner, canEdit: isOwner || isEditor, sharedReadOnly: isViewer });
   }),
 );
 
@@ -981,8 +997,9 @@ booksApiRouter.post(
       res.status(404).json({ ok: false, error: "There's no account with that name — check the spelling!" });
       return;
     }
-    const updated = await addEditor(bookId, target);
-    logger.info('book shared', { bookId, with: target, by: book.owner });
+    const canEdit = (req.body as { canEdit?: unknown }).canEdit === true;
+    const updated = await shareBook(bookId, target, canEdit);
+    logger.info('book shared', { bookId, with: target, canEdit, by: book.owner });
     res.json({ ok: true, book: updated });
   }),
 );
@@ -997,7 +1014,7 @@ booksApiRouter.post(
       return;
     }
     const target = requireString(req.body, 'username', { maxLength: 40 });
-    const updated = await removeEditor(bookId, target);
+    const updated = await removeShare(bookId, target);
     res.json({ ok: true, book: updated });
   }),
 );
