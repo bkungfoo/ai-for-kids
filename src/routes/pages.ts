@@ -1702,14 +1702,14 @@ function readerClientJs(): string {
     dustBtn.type = 'button';
     dustBtn.className = 'readbtn sprinkle';
     dustBtn.textContent = '🪄 Sprinkle fairy dust';
-    attachTooltip(dustBtn, 'Fixes your spelling and grammar and makes the words flow smoothly — the story stays yours.');
+    attachTooltip(dustBtn, 'Fix spelling and grammar!');
     dustBtn.addEventListener('click', () => sprinkleEditor(dustBtn, ta, st, opts.editIndex));
     row.appendChild(dustBtn);
     const gmBtn = document.createElement('button');
     gmBtn.type = 'button';
     gmBtn.className = 'readbtn godmother-btn';
     gmBtn.textContent = '🧚 Ask Fairy Godmother';
-    attachTooltip(gmBtn, 'Polishes your words and shares ideas for what could happen next — you write the story!');
+    attachTooltip(gmBtn, 'Suggest ideas for what comes next!');
     gmBtn.addEventListener('click', () =>
       askGodmother(gmBtn, ta,
         opts.editIndex !== undefined ? { editIndex: opts.editIndex } : { insertAt: opts.insertAt },
