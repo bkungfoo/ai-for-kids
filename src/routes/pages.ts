@@ -1026,6 +1026,17 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         /* While composing, the line stands where the music buttons were —
            centered like every other row on the page. */
         .musicstack .music-working { justify-content: center; font-size: 13px; }
+        /* Delayed hover tooltips */
+        .hovertip { position: absolute; z-index: 90; max-width: 240px; padding: 8px 11px;
+          background: #22333d; color: #f3f7f9; font-size: 12.5px; line-height: 1.45;
+          border-radius: 8px; box-shadow: 0 6px 18px rgba(16,42,54,.28);
+          opacity: 0; visibility: hidden; transform: translateY(3px);
+          transition: opacity .12s ease, transform .12s ease; pointer-events: none; }
+        .hovertip.on { opacity: 1; visibility: visible; transform: translateY(0); }
+        .hovertip::after { content: ''; position: absolute; top: 100%; left: 50%;
+          margin-left: -5px; border: 5px solid transparent; border-top-color: #22333d; }
+        .hovertip.below::after { top: auto; bottom: 100%; border-top-color: transparent;
+          border-bottom-color: #22333d; }
         /* Sharing roles + the publish warning */
         .shareopt { display: flex; align-items: center; gap: 8px; margin-top: 12px;
           font-size: 14px; font-weight: 600; color: #3d2f1e; cursor: pointer; }
@@ -1691,14 +1702,14 @@ function readerClientJs(): string {
     dustBtn.type = 'button';
     dustBtn.className = 'readbtn sprinkle';
     dustBtn.textContent = '🪄 Sprinkle fairy dust';
-    dustBtn.title = 'Magically fix the grammar and make the words flow';
+    attachTooltip(dustBtn, 'Fixes your spelling and grammar and makes the words flow smoothly — the story stays yours.');
     dustBtn.addEventListener('click', () => sprinkleEditor(dustBtn, ta, st, opts.editIndex));
     row.appendChild(dustBtn);
     const gmBtn = document.createElement('button');
     gmBtn.type = 'button';
     gmBtn.className = 'readbtn godmother-btn';
     gmBtn.textContent = '🧚 Ask Fairy Godmother';
-    gmBtn.title = 'She fixes your words and suggests what could happen next';
+    attachTooltip(gmBtn, 'Polishes your words and shares ideas for what could happen next — you write the story!');
     gmBtn.addEventListener('click', () =>
       askGodmother(gmBtn, ta,
         opts.editIndex !== undefined ? { editIndex: opts.editIndex } : { insertAt: opts.insertAt },
@@ -1841,6 +1852,47 @@ function readerClientJs(): string {
   // Every page's action buttons are placed through this one cluster, so
   // vertical spacing between rows comes from the same shared rules on every
   // page (cover included). Falsy rows are skipped.
+  // Delayed hover tooltips (UX: appear after a 0.4s hover so quick mouse
+  // passes never flash them; hide instantly on leave/click; also shown on
+  // keyboard focus, and exposed to screen readers via aria-describedby).
+  let tipSeq = 0;
+  function attachTooltip(el, text) {
+    const tip = document.createElement('div');
+    tip.className = 'hovertip';
+    tip.id = 'hovertip-' + (++tipSeq);
+    tip.setAttribute('role', 'tooltip');
+    tip.textContent = text;
+    document.body.appendChild(tip);
+    el.setAttribute('aria-describedby', tip.id);
+    let timer = null;
+    const show = () => {
+      timer = null;
+      const r = el.getBoundingClientRect();
+      tip.classList.add('on');
+      const tw = tip.offsetWidth;
+      // Centered above the button; flip below when there's no headroom, and
+      // clamp inside the viewport horizontally.
+      let x = r.left + r.width / 2 - tw / 2;
+      x = Math.max(8, Math.min(window.innerWidth - tw - 8, x));
+      let y = r.top - tip.offsetHeight - 8;
+      if (y < 8) { y = r.bottom + 8; tip.classList.add('below'); }
+      else tip.classList.remove('below');
+      tip.style.left = x + window.scrollX + 'px';
+      tip.style.top = y + window.scrollY + 'px';
+    };
+    const arm = () => { if (!timer && !tip.classList.contains('on')) timer = setTimeout(show, 400); };
+    const disarm = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      tip.classList.remove('on');
+    };
+    el.addEventListener('pointerenter', arm);
+    el.addEventListener('pointerleave', disarm);
+    el.addEventListener('pointerdown', disarm); // the click's feedback takes over
+    el.addEventListener('focus', arm);
+    el.addEventListener('blur', disarm);
+    return el;
+  }
+
   function escapeHtml(x) {
     return String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   }
