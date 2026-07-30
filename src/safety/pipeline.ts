@@ -59,6 +59,9 @@ export const SAFETY_LEVELS = [
 ] as const;
 export type SafetyLevel = (typeof SAFETY_LEVELS)[number];
 
+/** The baseline strictness applied when no session-specific level is set. */
+export const DEFAULT_SAFETY_LEVEL: SafetyLevel = 'BLOCK_MEDIUM_AND_ABOVE';
+
 /**
  * True when this verdict may pass at the session's safety level. An allowed
  * verdict always passes; a blocked one passes only when its severity sits
@@ -69,13 +72,14 @@ export type SafetyLevel = (typeof SAFETY_LEVELS)[number];
 export function permittedAtLevel(verdict: Verdict, level?: SafetyLevel): boolean {
   if (verdict.allowed) return true;
   const rank = SEVERITY_RANK[verdict.severity] ?? 3;
-  switch (level) {
+  switch (level ?? DEFAULT_SAFETY_LEVEL) {
     case 'BLOCK_NONE':
       return true;
     case 'BLOCK_ONLY_HIGH':
       return rank < SEVERITY_RANK.high;
     case 'BLOCK_MEDIUM_AND_ABOVE':
       return rank < SEVERITY_RANK.medium;
+    case 'BLOCK_LOW_AND_ABOVE':
     default:
       return false;
   }

@@ -40,7 +40,7 @@ export function experimentalState(req: Request): {
     eligible: experimentalEligible(req),
     enabled: session?.expFeatures ?? false,
     prompted: session?.expPrompted ?? false,
-    safetyLevel: safetyLevelFor(req) ?? 'BLOCK_LOW_AND_ABOVE',
+    safetyLevel: safetyLevelFor(req) ?? 'BLOCK_MEDIUM_AND_ABOVE',
   };
 }
 

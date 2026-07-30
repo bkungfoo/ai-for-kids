@@ -273,7 +273,7 @@ pagesRouter.get('/', (req: Request, res: Response) => {
           for (const v of ['BLOCK_LOW_AND_ABOVE', 'BLOCK_MEDIUM_AND_ABOVE', 'BLOCK_ONLY_HIGH', 'BLOCK_NONE']) {
             const opt = document.createElement('option');
             opt.value = v;
-            opt.textContent = v + (v === 'BLOCK_LOW_AND_ABOVE' ? ' (default)' : '');
+            opt.textContent = v + (v === 'BLOCK_MEDIUM_AND_ABOVE' ? ' (default)' : '');
             lvl.appendChild(opt);
           }
           const go = document.createElement('button');
