@@ -973,11 +973,10 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .gm-suggest { flex: 0 0 auto; margin-top: 10px; border: 1px solid #d9c37a;
           background: #fdf9f0; border-radius: 10px; padding: 10px 12px; }
         .gm-title { font-size: 12.5px; font-weight: 800; color: #8a5a00; }
-        .gm-opt { display: block; width: 100%; text-align: left; margin-top: 7px;
-          padding: 8px 11px; border: 1px solid #cbbfa4; border-radius: 8px; background: #fff;
-          cursor: pointer; font-family: Georgia, 'Times New Roman', serif; font-size: 14.5px;
+        .gm-idea { display: block; width: 100%; text-align: left; margin-top: 7px;
+          padding: 8px 11px; border: 1px dashed #cbbfa4; border-radius: 8px; background: #fffdf6;
+          font-family: Georgia, 'Times New Roman', serif; font-size: 14.5px;
           line-height: 1.45; color: #3d2f1e; }
-        .gm-opt:hover { background: #f6e8fb; border-color: #a06bc9; }
         /* Accepted sentence: rainbow sparkle text that solidifies into ink */
         .magic-overlay { position: relative; flex: 1; min-height: 220px;
           font-family: Georgia, 'Times New Roman', serif; font-size: 17px; line-height: 1.6;
@@ -1795,7 +1794,7 @@ function readerClientJs(): string {
             setTimeout(() => ta.classList.remove('revealed'), 1100);
           }
           showGmSuggestions(ta, r.suggestions || [], hooks);
-          setStatus('🧚 Pick a sentence you like — or say “no thanks”!');
+          setStatus('🧚 Read her ideas, then write what YOU imagine!');
         });
       } else {
         settle(() => {
@@ -1808,6 +1807,9 @@ function readerClientJs(): string {
     }
   }
 
+  // Scaffolding, not sentences: the godmother offers open-ended IDEAS the
+  // child reads for inspiration — nothing is inserted into their story. The
+  // words stay 100% theirs.
   function showGmSuggestions(ta, suggestions, hooks) {
     const old = document.getElementById('gm-suggest');
     if (old) old.remove();
@@ -1817,59 +1819,23 @@ function readerClientJs(): string {
     panel.className = 'gm-suggest';
     const title = document.createElement('div');
     title.className = 'gm-title';
-    title.textContent = '🧚 How could the story keep going?';
+    title.textContent = '🧚 Some ideas to get you unstuck — you write the words!';
     panel.appendChild(title);
     for (const s of suggestions) {
-      const opt = document.createElement('button');
-      opt.type = 'button';
-      opt.className = 'gm-opt';
-      opt.textContent = s;
-      opt.addEventListener('click', () => {
-        panel.remove();
-        acceptSentence(ta, s, hooks);
-      });
-      panel.appendChild(opt);
+      const idea = document.createElement('div');
+      idea.className = 'gm-idea';
+      idea.textContent = '💡 ' + s;
+      panel.appendChild(idea);
     }
     const no = document.createElement('button');
     no.type = 'button';
     no.className = 'linkbtn gm-cancel';
-    no.textContent = '✕ No thanks';
-    no.addEventListener('click', () => { panel.remove(); setStatus(''); });
+    no.textContent = '✨ Thanks — I know what to write!';
+    no.addEventListener('click', () => { panel.remove(); setStatus(''); ta.focus(); });
     panel.appendChild(no);
     ta.parentNode.insertBefore(panel, ta.nextSibling);
   }
 
-  function acceptSentence(ta, sentence, hooks) {
-    const existing = ta.value.replace(/\s+$/, '');
-    const sep = existing ? ' ' : '';
-    const full = existing + sep + sentence;
-    ta.value = full;
-    if (hooks && hooks.onChanged) hooks.onChanged(full);
-    // The accepted sentence fades in as rainbow sparkle-text, then solidifies.
-    const ov = document.createElement('div');
-    ov.className = 'magic-overlay';
-    ov.appendChild(document.createTextNode(existing + sep));
-    const span = document.createElement('span');
-    span.className = 'magic-new';
-    span.textContent = sentence;
-    ov.appendChild(span);
-    for (let i = 0; i < 10; i++) {
-      const d = document.createElement('span');
-      d.className = 'dust';
-      d.textContent = DUST_CHARS[Math.floor(Math.random() * DUST_CHARS.length)];
-      d.style.left = (10 + Math.random() * 80) + '%';
-      d.style.top = (10 + Math.random() * 80) + '%';
-      d.style.color = DUST_COLORS[Math.floor(Math.random() * DUST_COLORS.length)];
-      d.style.setProperty('--d', (1 + Math.random()).toFixed(2) + 's');
-      d.style.setProperty('--dl', (Math.random() * 0.5).toFixed(2) + 's');
-      ov.appendChild(d);
-    }
-    ta.style.display = 'none';
-    ta.parentNode.insertBefore(ov, ta);
-    setTimeout(() => { span.className = 'magic-done'; }, 1500);
-    setTimeout(() => { ov.remove(); ta.style.display = ''; ta.focus(); }, 2200);
-    setStatus('✨ Lovely choice! Keep writing — or ask her again.');
-  }
 
 
   // Every page's action buttons are placed through this one cluster, so
