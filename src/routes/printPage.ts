@@ -62,8 +62,6 @@ printPagesRouter.get('/books/:id/print', requirePageAuth, (req: Request, res: Re
   .slot { width: 50%; height: 100%; display: flex; align-items: center; justify-content: center; }
   .bookpage { position: relative; width: 4.9in; height: 4.9in; border: 2px dashed #b9c8d1;
     display: flex; overflow: hidden; background: #fff; }
-  .cut-hint { position: absolute; bottom: 5px; left: 50%; transform: translateX(-50%);
-    font-size: 8.5px; color: #c8d4db; letter-spacing: .5px; }
   /* The fold runs down the middle of every sheet — the crease that turns the
      stack into a booklet. */
   .foldline { position: absolute; top: 0; bottom: 0; left: 50%; width: 0;
@@ -88,9 +86,18 @@ printPagesRouter.get('/books/:id/print', requirePageAuth, (req: Request, res: Re
   .p-text { font-family: Georgia, 'Times New Roman', serif; font-size: 17px; line-height: 1.6;
     white-space: pre-wrap; overflow: hidden; text-align: left; width: 100%; }
   .p-credit { font-family: Georgia, serif; font-size: 15px; color: #5a4632; text-align: center; }
-  .p-num { position: absolute; bottom: 5px; left: 0.3in; font-size: 8.5px; color: #9bb0bb; }
+  /* Page number: bottom OUTER corner of each book page (away from the fold).
+     Because .bookpage fills the whole slot in borderless mode, the number
+     lands in the sheet-half's corner there. */
+  .p-num { position: absolute; bottom: 0.14in; font-size: 9px; color: #9bb0bb; }
+  .slot.left .p-num { left: 0.16in; right: auto; }
+  .slot.right .p-num { right: 0.16in; left: auto; }
   .theend { font-family: Georgia, serif; font-size: 26px; }
   .blank { color: #cfd9df; font-size: 10px; margin: auto; }
+  /* Borderless mode: no dotted page squares, no printed fold guide — the
+     book fills the whole paper. The page squares grow to fill their slot. */
+  #sheets.no-borders .bookpage { border-color: transparent; width: 100%; height: 100%; }
+  #sheets.no-borders .foldline, #sheets.no-borders .fold-hint { display: none; }
 
   /* --- print -------------------------------------------------------------- */
   @page { size: letter landscape; margin: 0; }
@@ -112,6 +119,12 @@ printPagesRouter.get('/books/:id/print', requirePageAuth, (req: Request, res: Re
         <option value="long">Long edge</option>
       </select>
     </label>
+    <label>Page borders:
+      <select id="borders">
+        <option value="on" selected>Dotted lines (trim to square pages)</option>
+        <option value="off">None (fill the whole paper)</option>
+      </select>
+    </label>
     <button id="printbtn" type="button">Print</button>
     <a href="/books/${bookId}">← Back to the book</a>
     <span id="status" style="font-size:13px;color:#5a7785"></span>
@@ -128,7 +141,8 @@ printPagesRouter.get('/books/:id/print', requirePageAuth, (req: Request, res: Re
       <li><strong>Fold the whole stack in half</strong> along the dotted FOLD line down the
         middle (a short-edge fold). Your book now reads in order from the front cover.</li>
       <li>Staple or add binder rings <strong>along the fold</strong>.</li>
-      <li>Optional: trim around each page's dotted border for neat square pages.</li>
+      <li>The dotted lines are just cutting guides. Choose <strong>Page borders: None</strong>
+        above to fill the whole paper instead, or trim around each dotted square for neat pages.</li>
     </ol>
     <p class="note" id="sheetnote"></p>
   </div>
@@ -184,21 +198,22 @@ function renderPage(p) {
       (p.image ? imgTag(p.image, '') : '<div class="p-credit">(no picture)</div>') + '</div>';
   }
   // words-only page
-  return '<div class="fullpage words"><div class="p-text">' + (p.text || '') + '</div></div>' +
-    '<div class="p-num">' + p.num + '</div>';
+  return '<div class="fullpage words"><div class="p-text">' + (p.text || '') + '</div></div>';
 }
 
 function slotHtml(idx, side) {
   const cls = 'slot ' + side;
   if (idx === null || !PAGES[idx]) return '<div class="' + cls + '"></div>';
   return '<div class="' + cls + '"><div class="bookpage">' + renderPage(PAGES[idx]) +
-    '<div class="cut-hint">page border — trim here if you like</div></div></div>';
+    '<div class="p-num">' + PAGES[idx].folio + '</div></div></div>';
 }
 
 function render() {
   const flip = document.getElementById('flip').value;
+  const borders = document.getElementById('borders').value;
   const sheets = imposeSheets(PAGES.length, flip);
   const host = document.getElementById('sheets');
+  host.className = borders === 'off' ? 'no-borders' : '';
   let html = '';
   sheets.forEach((s, i) => {
     for (const [side, name] of [[s.front, 'front'], [s.back, 'back']]) {
@@ -237,13 +252,14 @@ function render() {
       { kind: 'authors', title: b.title, byline: byline },
       { kind: 'illustrators', credit: 'Pictures by ' + illustrator },
     ];
-    let n = 1;
     for (const p of b.pages) {
       if (p.isEnd) { PAGES.push({ kind: 'end' }); continue; }
-      const num = n++;
-      PAGES.push({ kind: 'words', text: p.text, num: num });
-      PAGES.push({ kind: 'picture', image: p.image, num: num });
+      PAGES.push({ kind: 'words', text: p.text });
+      PAGES.push({ kind: 'picture', image: p.image });
     }
+    // Sequential book-page numbers, shown in the bottom outer corner of each
+    // page — a folding/assembly aid.
+    PAGES.forEach((pg, i) => { pg.folio = i + 1; });
     document.title = b.title + ' — print';
     render();
   } catch {
@@ -252,6 +268,7 @@ function render() {
 })();
 
 document.getElementById('flip').addEventListener('change', render);
+document.getElementById('borders').addEventListener('change', render);
 document.getElementById('printbtn').addEventListener('click', () => window.print());
 </script>
 </body>
