@@ -94,10 +94,11 @@ printPagesRouter.get('/books/:id/print', requirePageAuth, (req: Request, res: Re
   .slot.right .p-num { right: 0.16in; left: auto; }
   .theend { font-family: Georgia, serif; font-size: 26px; }
   .blank { color: #cfd9df; font-size: 10px; margin: auto; }
-  /* Borderless mode: no dotted page squares, no printed fold guide — the
-     book fills the whole paper. The page squares grow to fill their slot. */
+  /* Borderless mode: no dotted page squares — the book fills the whole paper.
+     The center FOLD line stays (it's the crease to fold on); only its text
+     label is dropped so it can't land on a full-bleed picture. */
   #sheets.no-borders .bookpage { border-color: transparent; width: 100%; height: 100%; }
-  #sheets.no-borders .foldline, #sheets.no-borders .fold-hint { display: none; }
+  #sheets.no-borders .fold-hint { display: none; }
 
   /* --- print -------------------------------------------------------------- */
   @page { size: letter landscape; margin: 0; }
@@ -141,8 +142,9 @@ printPagesRouter.get('/books/:id/print', requirePageAuth, (req: Request, res: Re
       <li><strong>Fold the whole stack in half</strong> along the dotted FOLD line down the
         middle (a short-edge fold). Your book now reads in order from the front cover.</li>
       <li>Staple or add binder rings <strong>along the fold</strong>.</li>
-      <li>The dotted lines are just cutting guides. Choose <strong>Page borders: None</strong>
-        above to fill the whole paper instead, or trim around each dotted square for neat pages.</li>
+      <li>The dotted page squares are just cutting guides. Choose <strong>Page borders: None</strong>
+        above to fill the whole paper (the center fold line stays either way), or trim around
+        each dotted square for neat pages.</li>
     </ol>
     <p class="note" id="sheetnote"></p>
   </div>
