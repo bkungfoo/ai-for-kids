@@ -54,8 +54,6 @@ printPagesRouter.get('/books/:id/print', requirePageAuth, (req: Request, res: Re
   /* One .sheet = one side of one piece of paper, landscape letter (11x8.5in). */
   .sheet { position: relative; width: 11in; height: 8.5in; margin: 18px auto; background: #fff;
     box-shadow: 0 6px 20px rgba(16,42,54,.18); display: flex; overflow: hidden; }
-  .side-label { position: absolute; top: 4px; left: 50%; transform: translateX(-50%);
-    font-size: 10px; color: #9bb0bb; letter-spacing: .5px; }
   /* Each slot centers ONE square book page. The square is what the child cuts
      out; front and back of a sheet place their squares identically, so one cut
      yields a leaf with a page on each side. */
@@ -107,7 +105,6 @@ printPagesRouter.get('/books/:id/print', requirePageAuth, (req: Request, res: Re
     .toolbar, .howto { display: none !important; }
     .sheet { margin: 0; box-shadow: none; page-break-after: always; break-after: page; }
     .sheet:last-child { page-break-after: auto; break-after: auto; }
-    .side-label { display: none; }
   }
 </style>
 </head>
@@ -206,8 +203,9 @@ function renderPage(p) {
 function slotHtml(idx, side) {
   const cls = 'slot ' + side;
   if (idx === null || !PAGES[idx]) return '<div class="' + cls + '"></div>';
+  const folio = PAGES[idx].folio ? '<div class="p-num">' + PAGES[idx].folio + '</div>' : '';
   return '<div class="' + cls + '"><div class="bookpage">' + renderPage(PAGES[idx]) +
-    '<div class="p-num">' + PAGES[idx].folio + '</div></div></div>';
+    folio + '</div></div>';
 }
 
 function render() {
@@ -218,9 +216,8 @@ function render() {
   host.className = borders === 'off' ? 'no-borders' : '';
   let html = '';
   sheets.forEach((s, i) => {
-    for (const [side, name] of [[s.front, 'front'], [s.back, 'back']]) {
+    for (const side of [s.front, s.back]) {
       html += '<div class="sheet">' +
-        '<div class="side-label">sheet ' + (i + 1) + ' — ' + name + '</div>' +
         slotHtml(side.left, 'left') + slotHtml(side.right, 'right') +
         '<div class="foldline"></div><div class="fold-hint">FOLD</div>' +
         '</div>';
@@ -259,9 +256,12 @@ function render() {
       PAGES.push({ kind: 'words', text: p.text });
       PAGES.push({ kind: 'picture', image: p.image });
     }
-    // Sequential book-page numbers, shown in the bottom outer corner of each
-    // page — a folding/assembly aid.
-    PAGES.forEach((pg, i) => { pg.folio = i + 1; });
+    // Page numbers start where the STORY does: the cover, authors and
+    // illustrators pages carry no number; the first words page is page 1.
+    let folio = 0;
+    for (const pg of PAGES) {
+      if (pg.kind === 'words' || pg.kind === 'picture') pg.folio = ++folio;
+    }
     document.title = b.title + ' — print';
     render();
   } catch {
