@@ -122,8 +122,8 @@ printPagesRouter.get('/books/:id/print', requirePageAuth, (req: Request, res: Re
     </label>
     <label>Page borders:
       <select id="borders">
-        <option value="on" selected>Dotted lines (trim to square pages)</option>
-        <option value="off">None (fill the whole paper)</option>
+        <option value="off" selected>None (fill the whole paper)</option>
+        <option value="on">Dotted lines (trim to square pages)</option>
       </select>
     </label>
     <button id="printbtn" type="button">Print</button>
