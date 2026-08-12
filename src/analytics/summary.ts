@@ -117,8 +117,10 @@ function topPatterns(seqs: string[][], max = 10): Array<{ pattern: string; count
     .map(([pattern, count]) => ({ pattern, count }));
 }
 
-export async function buildSummary(days: number) {
-  const events = await readEvents(days);
+export async function buildSummary(days: number, universe?: string) {
+  const events = (await readEvents(days)).filter(
+    (e) => !universe || (e.universe ?? 'harborhouse') === universe,
+  );
   const apiEvents = events.filter((e) => e.kind === 'api');
   const sessions = buildSessions(events);
 
@@ -269,8 +271,15 @@ export async function buildSummary(days: number) {
 
 export type SeriesMetric = 'events' | 'genai' | 'engaged' | 'blocked' | 'users';
 
-export async function buildSeries(days: number, bucketSec: number, metric: SeriesMetric) {
-  const events = await readEvents(days);
+export async function buildSeries(
+  days: number,
+  bucketSec: number,
+  metric: SeriesMetric,
+  universe?: string,
+) {
+  const events = (await readEvents(days)).filter(
+    (e) => !universe || (e.universe ?? 'harborhouse') === universe,
+  );
   const bucketMs = Math.max(60, bucketSec) * 1000;
   const now = Date.now();
   const from = now - days * 24 * 60 * 60 * 1000;

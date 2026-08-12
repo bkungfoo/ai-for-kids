@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express';
-import { experimentalEligible, requirePageAuth } from '../middleware/requireAuth.js';
+import { analyticsUniverseFor, requirePageAuth } from '../middleware/requireAuth.js';
 import { shell } from './pages.js';
 
 /**
@@ -11,7 +11,8 @@ import { shell } from './pages.js';
 export const dashboardRouter = Router();
 
 dashboardRouter.get('/dashboard', requirePageAuth, (req: Request, res: Response) => {
-  if (!experimentalEligible(req)) {
+  const universe = analyticsUniverseFor(req);
+  if (!universe) {
     res.status(404).type('html').send('<h2>Not found</h2>');
     return;
   }
@@ -21,7 +22,7 @@ dashboardRouter.get('/dashboard', requirePageAuth, (req: Request, res: Response)
       back: true,
       body: `<div class="card">
         <h1>📊 Usage dashboard</h1>
-        <p class="sub">How the kids are using Harbor House.
+        <p class="sub">How the kids are using ${universe === 'public' ? 'the public library' : 'Harbor House'}.
           <label>Window:
             <select id="days">
               <option value="7">7 days</option>

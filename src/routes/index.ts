@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { currentUniverse, currentUser, experimentalEligible, experimentalState, requireApiAuth, requireHarborUniverse, safetyLevelFor, setExperimental } from '../middleware/requireAuth.js';
+import { analyticsUniverseFor, currentUniverse, currentUser, experimentalEligible, experimentalState, requireApiAuth, requireHarborUniverse, safetyLevelFor, setExperimental } from '../middleware/requireAuth.js';
 import { analyticsMiddleware } from '../analytics/middleware.js';
 import { appendEvent } from '../analytics/store.js';
 import { activityForPage } from '../analytics/classify.js';
@@ -69,7 +69,8 @@ router.post('/v1/analytics/ping', (req: Request, res: Response) => {
 router.get(
   '/v1/analytics/series',
   asyncHandler(async (req, res) => {
-    if (!experimentalEligible(req)) {
+    const universe = analyticsUniverseFor(req);
+    if (!universe) {
       res.status(404).json({ ok: false, error: 'Not found' });
       return;
     }
@@ -77,7 +78,7 @@ router.get(
     const bucket = Math.min(86400, Math.max(600, Number(req.query.bucket) || 3600));
     const allowed = ['events', 'genai', 'engaged', 'blocked', 'users'];
     const metric = (allowed.includes(String(req.query.metric)) ? req.query.metric : 'genai') as SeriesMetric;
-    res.json({ ok: true, ...(await buildSeries(days, bucket, metric)) });
+    res.json({ ok: true, ...(await buildSeries(days, bucket, metric, universe)) });
   }),
 );
 
@@ -85,12 +86,13 @@ router.get(
 router.get(
   '/v1/analytics/summary',
   asyncHandler(async (req, res) => {
-    if (!experimentalEligible(req)) {
+    const universe = analyticsUniverseFor(req);
+    if (!universe) {
       res.status(404).json({ ok: false, error: 'Not found' });
       return;
     }
     const days = Math.min(90, Math.max(1, Number(req.query.days) || 14));
-    res.json({ ok: true, summary: await buildSummary(days) });
+    res.json({ ok: true, universe, summary: await buildSummary(days, universe) });
   }),
 );
 
