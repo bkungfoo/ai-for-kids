@@ -2,7 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { config } from '../config.js';
 import { parseCookies } from '../auth/cookies.js';
 import { getSession, setSessionExperimental } from '../auth/sessions.js';
-import { SAFETY_LEVELS, type SafetyLevel } from '../safety/pipeline.js';
+import { DEFAULT_SAFETY_LEVEL, SAFETY_LEVELS, type SafetyLevel } from '../safety/pipeline.js';
 import { accountUniverse, type Universe } from '../auth/userStore.js';
 
 function isAuthed(req: Request): boolean {
@@ -59,10 +59,15 @@ export function setExperimental(req: Request, enabled: boolean, safetyLevel?: un
 /** The session's moderation strictness — undefined means strictest. Only the
  * primary account's sessions can ever hold a relaxed level. */
 export function safetyLevelFor(req: Request): SafetyLevel | undefined {
-  if (!experimentalEligible(req)) return undefined;
-  const token = parseCookies(req)[config.auth.cookieName];
-  const level = getSession(token)?.safetyLevel;
-  return (SAFETY_LEVELS as readonly string[]).includes(level ?? '') ? (level as SafetyLevel) : undefined;
+  // The primary account tunes its own level via the login dialog.
+  if (experimentalEligible(req)) {
+    const token = parseCookies(req)[config.auth.cookieName];
+    const level = getSession(token)?.safetyLevel;
+    if ((SAFETY_LEVELS as readonly string[]).includes(level ?? '')) return level as SafetyLevel;
+  }
+  // Otherwise the baseline is per-universe: the public server blocks only
+  // high-severity content; Harbor House blocks medium and above.
+  return currentUniverse(req) === 'public' ? 'BLOCK_ONLY_HIGH' : DEFAULT_SAFETY_LEVEL;
 }
 
 /** True when this session opted into experimental features. */
