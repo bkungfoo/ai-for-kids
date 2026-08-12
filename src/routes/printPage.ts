@@ -151,6 +151,39 @@ printPagesRouter.get('/books/:id/print', requirePageAuth, (req: Request, res: Re
 <script>
 const BOOK_ID = ${JSON.stringify(bookId)};
 
+// Server-restart guard (same as the main app's shell): after a deploy the
+// session is gone, so loading the book would 401 — show a clear notice.
+(() => {
+  function showUpdateNotice() {
+    if (document.getElementById('server-update-notice')) return;
+    const bd = document.createElement('div');
+    bd.id = 'server-update-notice';
+    bd.style.cssText = 'position:fixed;inset:0;background:rgba(16,42,54,.62);z-index:99999;' +
+      'display:flex;align-items:center;justify-content:center;padding:20px;';
+    bd.innerHTML = '<div style="background:#fff;border-radius:14px;max-width:400px;width:100%;' +
+      'padding:26px 28px;text-align:center;box-shadow:0 24px 60px rgba(0,0,0,.42)">' +
+      '<div style="font-size:40px">🔄</div>' +
+      '<h3 style="margin:10px 0 8px;font-size:19px;color:#102a36">Server updated</h3>' +
+      '<p style="margin:0 0 18px;font-size:15px;line-height:1.5;color:#3d2f1e">' +
+      'Please reload the page and log in again.</p>' +
+      '<button type="button" onclick="location.reload()" style="padding:11px 26px;' +
+      'font-size:15px;font-weight:700;color:#fff;background:#2c6e8f;border:none;' +
+      'border-radius:10px;cursor:pointer">🔄 Reload the page</button></div>';
+    document.body.appendChild(bd);
+  }
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = async (input, init) => {
+    try {
+      const res = await nativeFetch(input, init);
+      if (res.status === 401) showUpdateNotice();
+      return res;
+    } catch (err) {
+      if (!(err && err.name === 'AbortError')) showUpdateNotice();
+      throw err;
+    }
+  };
+})();
+
 /** Saddle-stitch imposition — same as src/books/imposition.ts (kept in sync
  *  deliberately). Page 1 lands on the RIGHT of the first sheet's front, so
  *  folding the printed stack in half gives a booklet that reads in order. */

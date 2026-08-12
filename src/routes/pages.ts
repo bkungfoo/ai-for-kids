@@ -145,6 +145,54 @@ export function shell(opts: {
   </header>
   <main>${opts.body}</main>
   <script>
+    // Server-restart guard: a deploy wipes in-memory sessions, so every action
+    // afterward would 401 (or fail to connect during the restart) and — before
+    // this — hang or fail silently. A single global fetch wrapper turns any
+    // such failure into one clear, unmissable notice instead.
+    (() => {
+      function showUpdateNotice() {
+        if (document.getElementById('server-update-notice')) return;
+        const bd = document.createElement('div');
+        bd.id = 'server-update-notice';
+        bd.style.cssText = 'position:fixed;inset:0;background:rgba(16,42,54,.62);z-index:99999;' +
+          'display:flex;align-items:center;justify-content:center;padding:20px;' +
+          'font-family:system-ui,-apple-system,sans-serif;';
+        const m = document.createElement('div');
+        m.style.cssText = 'background:#fff;border-radius:14px;max-width:400px;width:100%;' +
+          'padding:26px 28px;text-align:center;box-shadow:0 24px 60px rgba(0,0,0,.42);';
+        m.innerHTML = '<div style="font-size:40px">🔄</div>' +
+          '<h3 style="margin:10px 0 8px;font-size:19px;color:#102a36">Server updated</h3>' +
+          '<p style="margin:0 0 18px;font-size:15px;line-height:1.5;color:#3d2f1e">' +
+          'Please reload the page and log in again.</p>';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = '🔄 Reload the page';
+        btn.style.cssText = 'padding:11px 26px;font-size:15px;font-weight:700;color:#fff;' +
+          'background:#2c6e8f;border:none;border-radius:10px;cursor:pointer;';
+        btn.addEventListener('click', () => location.reload());
+        m.appendChild(btn);
+        bd.appendChild(m);
+        document.body.appendChild(bd);
+      }
+      const nativeFetch = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        const isApi = url.indexOf('/v1/') !== -1 || url.indexOf('/v1/') === 0;
+        // The background heartbeat must never raise the notice on its own.
+        const silent = url.indexOf('/v1/analytics/ping') !== -1;
+        try {
+          const res = await nativeFetch(input, init);
+          if (isApi && !silent && res.status === 401) showUpdateNotice();
+          return res;
+        } catch (err) {
+          // Couldn't reach the server for a real action (e.g. mid-restart) —
+          // AbortError is our own cancellation, so ignore that one.
+          if (isApi && !silent && !(err && err.name === 'AbortError')) showUpdateNotice();
+          throw err;
+        }
+      };
+    })();
+
     // Engagement heartbeat: ping only while the user is really here (input
     // in the last 30s AND the tab visible). Powers the analytics dashboard's
     // time-on-site; silence past the idle limit ends the counted session.
