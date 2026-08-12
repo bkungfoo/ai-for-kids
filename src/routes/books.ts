@@ -125,10 +125,15 @@ function pageScenePrompt(
       'objects, including any changes that happen to them across the pages.';
   return (
     `Illustration for one page of a children's picture storybook titled "${book.title}", ` +
-    'in a bright, colorful, friendly art style. No text, words or lettering in the image.\n' +
+    'in a bright, colorful, friendly art style.\n' +
     `This page's story: ${pageText}\n` +
     `Draw this scene: ${imagePrompt}\n` +
-    reinforcement
+    `${reinforcement}\n` +
+    // Last line, where image models weight instructions most: page
+    // illustrations must be wordless (unlike the cover, which shows the
+    // title). Cover the sneaky cases, and end on the plain phrase.
+    'The picture must have NO text of any kind — no letters, numbers, signs, ' +
+    'labels, captions, speech bubbles or writing anywhere in the image. No words.'
   );
 }
 
