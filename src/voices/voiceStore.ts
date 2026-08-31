@@ -43,7 +43,7 @@ async function save(voice: Voice): Promise<void> {
   const file = fileFor(voice.id);
   if (!file) throw new Error(`invalid voice id: ${voice.id}`);
   await mkdir(DATA_DIR, { recursive: true });
-  const tmp = `${file}.tmp`;
+  const tmp = `${file}.${randomUUID()}.tmp`;
   await writeFile(tmp, JSON.stringify(voice, null, 2), 'utf8');
   await rename(tmp, file);
 }
