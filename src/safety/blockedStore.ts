@@ -43,7 +43,7 @@ export async function recordBlocked(
   await mkdir(DATA_DIR, { recursive: true });
   // Timestamp-first filename so a plain sort is chronological.
   const file = path.join(DATA_DIR, `${full.createdAt.replace(/[:.]/g, '-')}-${full.id}.json`);
-  const tmp = `${file}.tmp`;
+  const tmp = `${file}.${randomUUID()}.tmp`;
   await writeFile(tmp, JSON.stringify(full), 'utf8');
   await rename(tmp, file);
   await prune();

@@ -152,9 +152,20 @@ async function save(book: Book): Promise<void> {
   const file = fileFor(book.id);
   if (!file) throw new Error(`invalid book id: ${book.id}`);
   // Write-then-rename so a crash mid-write can't corrupt an existing book.
-  const tmp = `${file}.tmp`;
-  await writeFile(tmp, JSON.stringify(book), 'utf8');
-  await rename(tmp, file);
+  // The temp name must be unique per write: two concurrent saves of the same
+  // book sharing one temp path interleave, leaving a short document with the
+  // longer one's tail appended — which then fails to parse and the book
+  // silently vanishes from the shelf.
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(tmp, JSON.stringify(book), 'utf8');
+    await rename(tmp, file);
+  } catch (err) {
+    // Unique temp names are never reused, so a failed write would otherwise
+    // strand a full-size copy of the book on disk.
+    await unlink(tmp).catch(() => {});
+    throw err;
+  }
 }
 
 export async function createBook(
@@ -561,7 +572,7 @@ export async function snapshotBook(id: string): Promise<boolean> {
   try {
     const data = await readFile(file, 'utf8');
     await mkdir(SNAP_DIR, { recursive: true });
-    const tmp = `${snap}.tmp`;
+    const tmp = `${snap}.${randomUUID()}.tmp`;
     await writeFile(tmp, data, 'utf8');
     await rename(tmp, snap);
     return true;
@@ -578,7 +589,7 @@ export async function revertBook(id: string): Promise<Book | undefined> {
   try {
     const data = await readFile(snap, 'utf8');
     const book = JSON.parse(data) as Book;
-    const tmp = `${file}.tmp`;
+    const tmp = `${file}.${randomUUID()}.tmp`;
     await writeFile(tmp, data, 'utf8');
     await rename(tmp, file);
     await unlink(snap).catch(() => {});

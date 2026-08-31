@@ -1,4 +1,4 @@
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { config } from '../config.js';
@@ -42,7 +42,7 @@ function load(): StoredUser[] {
 
 function persist(users: StoredUser[]): void {
   mkdirSync(path.dirname(FILE), { recursive: true });
-  const tmp = `${FILE}.tmp`;
+  const tmp = `${FILE}.${randomUUID()}.tmp`;
   writeFileSync(tmp, JSON.stringify(users, null, 2), 'utf8');
   renameSync(tmp, FILE);
   cache = users;

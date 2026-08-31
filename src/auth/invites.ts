@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -43,7 +43,7 @@ function load(): Invite[] {
 
 function persist(invites: Invite[]): void {
   mkdirSync(path.dirname(FILE), { recursive: true });
-  const tmp = `${FILE}.tmp`;
+  const tmp = `${FILE}.${randomUUID()}.tmp`;
   writeFileSync(tmp, JSON.stringify(invites, null, 2), 'utf8');
   renameSync(tmp, FILE);
   cache = invites;
