@@ -35,6 +35,9 @@ export interface BookPage {
    * free). Cleared whenever the words change. Null/absent means not narrated.
    */
   narration?: BookNarration | null;
+  /** This page's words were blocked by moderation, so they cannot be
+   * narrated. Cleared whenever the words change. */
+  narrationBlocked?: boolean;
   /**
    * Instrumental background music for the page — plays softly underneath the
    * narration. The audio itself is an mp3 under data/books/music/<id>.mp3
@@ -118,9 +121,19 @@ export interface Book {
   narratorVoiceId?: string | null;
   /** Display name of that voice, denormalized for the reader UI. */
   narratorVoiceName?: string | null;
+  /**
+   * The cover intro could not be narrated because moderation blocked its text
+   * (e.g. an author name that reads as personal information). Without this the
+   * readiness check would wait for a recording that can never be made.
+   * Cleared whenever the authors change.
+   */
+  introNarrationBlocked?: boolean;
   /** Accounts the owner shared EDIT permission with (never the owner itself).
    * Editors can change content but not publish, delete, share, or transfer. */
   editors?: string[];
+  /** Accounts the book was shared with READ-ONLY — they can open and read it
+   * exactly like a library book, but change nothing. */
+  viewers?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -205,6 +218,7 @@ export async function updateAuthors(id: string, authors: string[]): Promise<Book
   if (!book) return undefined;
   book.authors = authors;
   delete book.introNarration; // the "written by" line changed
+  delete book.introNarrationBlocked; // new names deserve a fresh attempt
   book.updatedAt = new Date().toISOString();
   await save(book);
   return book;
@@ -303,23 +317,33 @@ export async function cloneBook(id: string, owner: string | undefined): Promise<
   return copy;
 }
 
-/** Share edit permission with another account (idempotent). */
-export async function addEditor(id: string, username: string): Promise<Book | undefined> {
+/** Share the book with another account, as an editor or a read-only viewer.
+ * Idempotent, and moving someone between roles just re-shares them. */
+export async function shareBook(
+  id: string,
+  username: string,
+  canEdit: boolean,
+): Promise<Book | undefined> {
   const book = await getBook(id);
   if (!book) return undefined;
   const editors = new Set(book.editors ?? []);
-  if (username !== book.owner) editors.add(username);
+  const viewers = new Set(book.viewers ?? []);
+  editors.delete(username);
+  viewers.delete(username);
+  if (username !== book.owner) (canEdit ? editors : viewers).add(username);
   book.editors = [...editors];
+  book.viewers = [...viewers];
   book.updatedAt = new Date().toISOString();
   await save(book);
   return book;
 }
 
-/** Take an account's edit permission away. */
-export async function removeEditor(id: string, username: string): Promise<Book | undefined> {
+/** Stop sharing with an account entirely (either role). */
+export async function removeShare(id: string, username: string): Promise<Book | undefined> {
   const book = await getBook(id);
   if (!book) return undefined;
   book.editors = (book.editors ?? []).filter((e) => e !== username);
+  book.viewers = (book.viewers ?? []).filter((v) => v !== username);
   book.updatedAt = new Date().toISOString();
   await save(book);
   return book;
@@ -335,6 +359,7 @@ export async function transferBook(id: string, newOwner: string): Promise<Book |
   editors.delete(newOwner);
   book.owner = newOwner;
   book.editors = [...editors];
+  book.viewers = (book.viewers ?? []).filter((v) => v !== newOwner);
   book.updatedAt = new Date().toISOString();
   await save(book);
   return book;
@@ -374,6 +399,20 @@ export async function purgeNarratorVoice(voiceId: string): Promise<number> {
     }
   }
   return touched;
+}
+
+/** Record that a narration piece is unrecordable because moderation blocked
+ * its text, so readiness stops waiting on it. `pageIndex` null = cover intro. */
+export async function markNarrationBlocked(
+  id: string,
+  pageIndex: number | null,
+): Promise<void> {
+  const book = await getBook(id);
+  if (!book) return;
+  if (pageIndex === null) book.introNarrationBlocked = true;
+  else if (book.pages[pageIndex]) book.pages[pageIndex]!.narrationBlocked = true;
+  else return;
+  await save(book);
 }
 
 /** Move a book to the public library. Published books can no longer be edited. */
@@ -492,7 +531,10 @@ export async function updatePage(
   if (!book) return undefined;
   const page = book.pages[index];
   if (!page) return undefined;
-  book.pages[index] = { ...page, ...patch };
+  const merged = { ...page, ...patch };
+  // New words deserve a fresh attempt at narration.
+  if (patch.text !== undefined && patch.text !== page.text) delete merged.narrationBlocked;
+  book.pages[index] = merged;
   book.updatedAt = new Date().toISOString();
   await save(book);
   return book;

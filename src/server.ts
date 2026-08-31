@@ -5,6 +5,8 @@ import { errorHandler, notFound } from './middleware/errorHandler.js';
 import { authRouter } from './routes/auth.js';
 import { musicPagesRouter } from './routes/musicPages.js';
 import { voicePagesRouter } from './routes/voicePages.js';
+import { dashboardRouter } from './routes/dashboardPage.js';
+import { printPagesRouter } from './routes/printPage.js';
 import { pagesRouter } from './routes/pages.js';
 import { reviewRouter } from './routes/review.js';
 import { router } from './routes/index.js';
@@ -38,6 +40,10 @@ export function createServer(): Express {
   app.use(musicPagesRouter);
   // Voices section (record + clone + speak).
   app.use(voicePagesRouter);
+  // Analytics dashboard (primary account only).
+  app.use(dashboardRouter);
+  // Printable storybook (landscape 2-up duplex).
+  app.use(printPagesRouter);
   // JSON generation API (/v1/*) and health.
   app.use(router);
 

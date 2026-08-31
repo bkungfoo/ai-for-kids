@@ -144,6 +144,76 @@ export function shell(opts: {
     <form method="post" action="/logout"><button class="signout" type="submit">Sign out</button></form>
   </header>
   <main>${opts.body}</main>
+  <script>
+    // Server-restart guard: a deploy wipes in-memory sessions, so every action
+    // afterward would 401 (or fail to connect during the restart) and — before
+    // this — hang or fail silently. A single global fetch wrapper turns any
+    // such failure into one clear, unmissable notice instead.
+    (() => {
+      function showUpdateNotice() {
+        if (document.getElementById('server-update-notice')) return;
+        const bd = document.createElement('div');
+        bd.id = 'server-update-notice';
+        bd.style.cssText = 'position:fixed;inset:0;background:rgba(16,42,54,.62);z-index:99999;' +
+          'display:flex;align-items:center;justify-content:center;padding:20px;' +
+          'font-family:system-ui,-apple-system,sans-serif;';
+        const m = document.createElement('div');
+        m.style.cssText = 'background:#fff;border-radius:14px;max-width:400px;width:100%;' +
+          'padding:26px 28px;text-align:center;box-shadow:0 24px 60px rgba(0,0,0,.42);';
+        m.innerHTML = '<div style="font-size:40px">🔄</div>' +
+          '<h3 style="margin:10px 0 8px;font-size:19px;color:#102a36">Server updated</h3>' +
+          '<p style="margin:0 0 18px;font-size:15px;line-height:1.5;color:#3d2f1e">' +
+          'Please reload the page and log in again.</p>';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = '🔄 Reload the page';
+        btn.style.cssText = 'padding:11px 26px;font-size:15px;font-weight:700;color:#fff;' +
+          'background:#2c6e8f;border:none;border-radius:10px;cursor:pointer;';
+        btn.addEventListener('click', () => location.reload());
+        m.appendChild(btn);
+        bd.appendChild(m);
+        document.body.appendChild(bd);
+      }
+      const nativeFetch = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        const isApi = url.indexOf('/v1/') !== -1 || url.indexOf('/v1/') === 0;
+        // The background heartbeat must never raise the notice on its own.
+        const silent = url.indexOf('/v1/analytics/ping') !== -1;
+        try {
+          const res = await nativeFetch(input, init);
+          if (isApi && !silent && res.status === 401) showUpdateNotice();
+          return res;
+        } catch (err) {
+          // Couldn't reach the server for a real action (e.g. mid-restart) —
+          // AbortError is our own cancellation, so ignore that one.
+          if (isApi && !silent && !(err && err.name === 'AbortError')) showUpdateNotice();
+          throw err;
+        }
+      };
+    })();
+
+    // Engagement heartbeat: ping only while the user is really here (input
+    // in the last 30s AND the tab visible). Powers the analytics dashboard's
+    // time-on-site; silence past the idle limit ends the counted session.
+    (() => {
+      let lastInput = Date.now();
+      const mark = () => { lastInput = Date.now(); };
+      for (const ev of ['pointerdown', 'pointermove', 'keydown', 'scroll', 'touchstart']) {
+        addEventListener(ev, mark, { passive: true });
+      }
+      setInterval(() => {
+        if (document.visibilityState !== 'visible') return;
+        if (Date.now() - lastInput > 30000) return;
+        fetch('/v1/analytics/ping', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path: location.pathname }),
+          keepalive: true,
+        }).catch(() => {});
+      }, 30000);
+    })();
+  </script>
 </body>
 </html>`;
 }
@@ -251,7 +321,7 @@ pagesRouter.get('/', (req: Request, res: Response) => {
           for (const v of ['BLOCK_LOW_AND_ABOVE', 'BLOCK_MEDIUM_AND_ABOVE', 'BLOCK_ONLY_HIGH', 'BLOCK_NONE']) {
             const opt = document.createElement('option');
             opt.value = v;
-            opt.textContent = v + (v === 'BLOCK_LOW_AND_ABOVE' ? ' (default)' : '');
+            opt.textContent = v + (v === 'BLOCK_MEDIUM_AND_ABOVE' ? ' (default)' : '');
             lvl.appendChild(opt);
           }
           const go = document.createElement('button');
@@ -605,7 +675,7 @@ const BOOK_TILE_JS = `
       const shared = document.createElement('span');
       shared.style.cssText = 'display:inline-block;font-size:11px;font-weight:700;color:#2c6e8f;' +
         'background:#dcebf1;border-radius:999px;padding:2px 8px;margin-bottom:4px;';
-      shared.textContent = '👥 Shared by ' + b.sharedBy;
+      shared.textContent = '👥 Shared by ' + b.sharedBy + (b.readOnly ? ' (read only)' : '');
       meta.appendChild(shared);
     }
     const t = document.createElement('div');
@@ -951,11 +1021,10 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         .gm-suggest { flex: 0 0 auto; margin-top: 10px; border: 1px solid #d9c37a;
           background: #fdf9f0; border-radius: 10px; padding: 10px 12px; }
         .gm-title { font-size: 12.5px; font-weight: 800; color: #8a5a00; }
-        .gm-opt { display: block; width: 100%; text-align: left; margin-top: 7px;
-          padding: 8px 11px; border: 1px solid #cbbfa4; border-radius: 8px; background: #fff;
-          cursor: pointer; font-family: Georgia, 'Times New Roman', serif; font-size: 14.5px;
+        .gm-idea { display: block; width: 100%; text-align: left; margin-top: 7px;
+          padding: 8px 11px; border: 1px dashed #cbbfa4; border-radius: 8px; background: #fffdf6;
+          font-family: Georgia, 'Times New Roman', serif; font-size: 14.5px;
           line-height: 1.45; color: #3d2f1e; }
-        .gm-opt:hover { background: #f6e8fb; border-color: #a06bc9; }
         /* Accepted sentence: rainbow sparkle text that solidifies into ink */
         .magic-overlay { position: relative; flex: 1; min-height: 220px;
           font-family: Georgia, 'Times New Roman', serif; font-size: 17px; line-height: 1.6;
@@ -1005,6 +1074,25 @@ pagesRouter.get('/books/:id', (req: Request, res: Response) => {
         /* While composing, the line stands where the music buttons were —
            centered like every other row on the page. */
         .musicstack .music-working { justify-content: center; font-size: 13px; }
+        /* Delayed hover tooltips */
+        .hovertip { position: absolute; z-index: 90; max-width: 240px; padding: 8px 11px;
+          background: #22333d; color: #f3f7f9; font-size: 12.5px; line-height: 1.45;
+          border-radius: 8px; box-shadow: 0 6px 18px rgba(16,42,54,.28);
+          opacity: 0; visibility: hidden; transform: translateY(3px);
+          transition: opacity .12s ease, transform .12s ease; pointer-events: none; }
+        .hovertip.on { opacity: 1; visibility: visible; transform: translateY(0); }
+        .hovertip::after { content: ''; position: absolute; top: 100%; left: 50%;
+          margin-left: -5px; border: 5px solid transparent; border-top-color: #22333d; }
+        .hovertip.below::after { top: auto; bottom: 100%; border-top-color: transparent;
+          border-bottom-color: #22333d; }
+        /* Sharing roles + the publish warning */
+        .shareopt { display: flex; align-items: center; gap: 8px; margin-top: 12px;
+          font-size: 14px; font-weight: 600; color: #3d2f1e; cursor: pointer; }
+        .shareopt input { width: 16px; height: 16px; accent-color: #2c6e8f; cursor: pointer; }
+        .sharehint { font-size: 12.5px; color: #6b5d43; margin: 4px 0 2px 24px; }
+        .publishwarn { text-align: center; }
+        .publishwarn .pw-icon { font-size: 38px; }
+        .publishwarn p { font-size: 14px; line-height: 1.55; color: #3d2f1e; margin: 8px 0; }
         /* Narrator voice picker + per-page retakes */
         .readbtn.voice-btn { background: #efe9f7; border-color: #a58bc9; }
         .voicepick { max-height: 46vh; overflow-y: auto; }
@@ -1662,14 +1750,14 @@ function readerClientJs(): string {
     dustBtn.type = 'button';
     dustBtn.className = 'readbtn sprinkle';
     dustBtn.textContent = '🪄 Sprinkle fairy dust';
-    dustBtn.title = 'Magically fix the grammar and make the words flow';
+    attachTooltip(dustBtn, 'Fix spelling and grammar!');
     dustBtn.addEventListener('click', () => sprinkleEditor(dustBtn, ta, st, opts.editIndex));
     row.appendChild(dustBtn);
     const gmBtn = document.createElement('button');
     gmBtn.type = 'button';
     gmBtn.className = 'readbtn godmother-btn';
     gmBtn.textContent = '🧚 Ask Fairy Godmother';
-    gmBtn.title = 'She fixes your words and suggests what could happen next';
+    attachTooltip(gmBtn, 'Suggest ideas for what comes next!');
     gmBtn.addEventListener('click', () =>
       askGodmother(gmBtn, ta,
         opts.editIndex !== undefined ? { editIndex: opts.editIndex } : { insertAt: opts.insertAt },
@@ -1765,7 +1853,7 @@ function readerClientJs(): string {
             setTimeout(() => ta.classList.remove('revealed'), 1100);
           }
           showGmSuggestions(ta, r.suggestions || [], hooks);
-          setStatus('🧚 Pick a sentence you like — or say “no thanks”!');
+          setStatus('🧚 Read her ideas, then write what YOU imagine!');
         });
       } else {
         settle(() => {
@@ -1778,6 +1866,9 @@ function readerClientJs(): string {
     }
   }
 
+  // Scaffolding, not sentences: the godmother offers open-ended IDEAS the
+  // child reads for inspiration — nothing is inserted into their story. The
+  // words stay 100% theirs.
   function showGmSuggestions(ta, suggestions, hooks) {
     const old = document.getElementById('gm-suggest');
     if (old) old.remove();
@@ -1787,64 +1878,73 @@ function readerClientJs(): string {
     panel.className = 'gm-suggest';
     const title = document.createElement('div');
     title.className = 'gm-title';
-    title.textContent = '🧚 How could the story keep going?';
+    title.textContent = '🧚 Some ideas to get you unstuck — you write the words!';
     panel.appendChild(title);
     for (const s of suggestions) {
-      const opt = document.createElement('button');
-      opt.type = 'button';
-      opt.className = 'gm-opt';
-      opt.textContent = s;
-      opt.addEventListener('click', () => {
-        panel.remove();
-        acceptSentence(ta, s, hooks);
-      });
-      panel.appendChild(opt);
+      const idea = document.createElement('div');
+      idea.className = 'gm-idea';
+      idea.textContent = '💡 ' + s;
+      panel.appendChild(idea);
     }
     const no = document.createElement('button');
     no.type = 'button';
     no.className = 'linkbtn gm-cancel';
-    no.textContent = '✕ No thanks';
-    no.addEventListener('click', () => { panel.remove(); setStatus(''); });
+    no.textContent = '✨ Thanks — I know what to write!';
+    no.addEventListener('click', () => { panel.remove(); setStatus(''); ta.focus(); });
     panel.appendChild(no);
     ta.parentNode.insertBefore(panel, ta.nextSibling);
   }
 
-  function acceptSentence(ta, sentence, hooks) {
-    const existing = ta.value.replace(/\s+$/, '');
-    const sep = existing ? ' ' : '';
-    const full = existing + sep + sentence;
-    ta.value = full;
-    if (hooks && hooks.onChanged) hooks.onChanged(full);
-    // The accepted sentence fades in as rainbow sparkle-text, then solidifies.
-    const ov = document.createElement('div');
-    ov.className = 'magic-overlay';
-    ov.appendChild(document.createTextNode(existing + sep));
-    const span = document.createElement('span');
-    span.className = 'magic-new';
-    span.textContent = sentence;
-    ov.appendChild(span);
-    for (let i = 0; i < 10; i++) {
-      const d = document.createElement('span');
-      d.className = 'dust';
-      d.textContent = DUST_CHARS[Math.floor(Math.random() * DUST_CHARS.length)];
-      d.style.left = (10 + Math.random() * 80) + '%';
-      d.style.top = (10 + Math.random() * 80) + '%';
-      d.style.color = DUST_COLORS[Math.floor(Math.random() * DUST_COLORS.length)];
-      d.style.setProperty('--d', (1 + Math.random()).toFixed(2) + 's');
-      d.style.setProperty('--dl', (Math.random() * 0.5).toFixed(2) + 's');
-      ov.appendChild(d);
-    }
-    ta.style.display = 'none';
-    ta.parentNode.insertBefore(ov, ta);
-    setTimeout(() => { span.className = 'magic-done'; }, 1500);
-    setTimeout(() => { ov.remove(); ta.style.display = ''; ta.focus(); }, 2200);
-    setStatus('✨ Lovely choice! Keep writing — or ask her again.');
-  }
 
 
   // Every page's action buttons are placed through this one cluster, so
   // vertical spacing between rows comes from the same shared rules on every
   // page (cover included). Falsy rows are skipped.
+  // Delayed hover tooltips (UX: appear after a 0.4s hover so quick mouse
+  // passes never flash them; hide instantly on leave/click; also shown on
+  // keyboard focus, and exposed to screen readers via aria-describedby).
+  let tipSeq = 0;
+  function attachTooltip(el, text) {
+    const tip = document.createElement('div');
+    tip.className = 'hovertip';
+    tip.id = 'hovertip-' + (++tipSeq);
+    tip.setAttribute('role', 'tooltip');
+    tip.textContent = text;
+    document.body.appendChild(tip);
+    el.setAttribute('aria-describedby', tip.id);
+    let timer = null;
+    const show = () => {
+      timer = null;
+      const r = el.getBoundingClientRect();
+      tip.classList.add('on');
+      const tw = tip.offsetWidth;
+      // Centered above the button; flip below when there's no headroom, and
+      // clamp inside the viewport horizontally.
+      let x = r.left + r.width / 2 - tw / 2;
+      x = Math.max(8, Math.min(window.innerWidth - tw - 8, x));
+      let y = r.top - tip.offsetHeight - 8;
+      if (y < 8) { y = r.bottom + 8; tip.classList.add('below'); }
+      else tip.classList.remove('below');
+      tip.style.left = x + window.scrollX + 'px';
+      tip.style.top = y + window.scrollY + 'px';
+    };
+    const arm = () => { if (!timer && !tip.classList.contains('on')) timer = setTimeout(show, 400); };
+    const disarm = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      tip.classList.remove('on');
+    };
+    el.addEventListener('pointerenter', arm);
+    el.addEventListener('pointerleave', disarm);
+    el.addEventListener('pointerdown', disarm); // the click's feedback takes over
+    el.addEventListener('focus', arm);
+    el.addEventListener('blur', disarm);
+    return el;
+  }
+
+  function escapeHtml(x) {
+    return String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
   function actionCluster(rows, extraClass) {
     const box = document.createElement('div');
     box.className = 'actions' + (extraClass ? ' ' + extraClass : '');
@@ -1883,6 +1983,8 @@ function readerClientJs(): string {
       }
       right.appendChild(actionCluster([
         readAllControls(),
+        // Print: landscape 2-up duplex with cut lines (see routes/printPage.ts).
+        printControls(),
         // Library books: anyone signed in can take an editable copy home.
         book.status === 'published' ? cloneBookControls() : null,
         // Whole-book narrator picker: above the music buttons, creator only.
@@ -2560,6 +2662,18 @@ function readerClientJs(): string {
     })();
   }
 
+  function printControls() {
+    const wrap = document.createElement('div');
+    wrap.className = 'readrow';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'readbtn';
+    btn.textContent = '🖨️ Print this book';
+    btn.addEventListener('click', () => { stopReading(); window.open('/books/' + bookId + '/print', '_blank'); });
+    wrap.appendChild(btn);
+    return wrap;
+  }
+
   // --- Clone from the library --------------------------------------------------
   function cloneBookControls() {
     const wrap = document.createElement('div');
@@ -2624,6 +2738,19 @@ function readerClientJs(): string {
     addRow.appendChild(add);
     modal.appendChild(addRow);
 
+    // Read-only by default: sharing shows the book, editing is the extra step.
+    const editRow = document.createElement('label');
+    editRow.className = 'shareopt';
+    const editBox = document.createElement('input');
+    editBox.type = 'checkbox';
+    editRow.appendChild(editBox);
+    editRow.appendChild(document.createTextNode(' Let them change the book too'));
+    modal.appendChild(editRow);
+    const editHint = document.createElement('div');
+    editHint.className = 'sharehint';
+    editHint.textContent = 'Leave this unchecked and they can only read your book, like a library book.';
+    modal.appendChild(editHint);
+
     const doneRow = document.createElement('div');
     doneRow.className = 'music-actions';
     const done = document.createElement('button');
@@ -2648,17 +2775,33 @@ function readerClientJs(): string {
     function redraw() {
       list.innerHTML = '';
       const editors = book.editors || [];
+      const viewers = book.viewers || [];
+      const shared = [
+        ...editors.map((n) => ({ name: n, canEdit: true })),
+        ...viewers.map((n) => ({ name: n, canEdit: false })),
+      ];
       const label = document.createElement('label');
-      label.textContent = editors.length
-        ? 'These accounts can edit this book too:'
-        : 'No one else can edit this book yet. Share it with a friend’s account!';
+      label.textContent = shared.length
+        ? 'You shared this book with:'
+        : 'You haven’t shared this book yet. Share it with a friend’s account!';
       list.appendChild(label);
-      for (const name of editors) {
+      for (const entry of shared) {
+        const name = entry.name;
         const row = document.createElement('div');
         row.className = 'music-actions';
         const who = document.createElement('span');
         who.style.cssText = 'font-weight:700;flex:1;';
-        who.textContent = '👤 ' + name;
+        who.textContent = '👤 ' + name + (entry.canEdit ? ' — can edit' : ' — can read');
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'linkbtn';
+        toggle.textContent = entry.canEdit ? '👁️ Make read-only' : '✏️ Let them edit';
+        toggle.addEventListener('click', async () => {
+          toggle.disabled = true;
+          const err = await call('/share', { username: name, canEdit: !entry.canEdit });
+          if (err) setStatus(err.text, err.cls);
+          redraw();
+        });
         const crown = document.createElement('button');
         crown.type = 'button';
         crown.className = 'linkbtn';
@@ -2682,6 +2825,7 @@ function readerClientJs(): string {
           redraw();
         });
         row.appendChild(who);
+        row.appendChild(toggle);
         row.appendChild(crown);
         row.appendChild(rm);
         list.appendChild(row);
@@ -2693,7 +2837,7 @@ function readerClientJs(): string {
       const name = nameInput.value.trim();
       if (!name) { setStatus('Type an account name to share with! ✏️', 'blocked'); return; }
       add.disabled = true;
-      const err = await call('/share', { username: name });
+      const err = await call('/share', { username: name, canEdit: editBox.checked });
       add.disabled = false;
       if (err) { setStatus(err.text, err.cls); return; }
       nameInput.value = '';
@@ -3366,23 +3510,60 @@ function readerClientJs(): string {
       pub.className = 'cta publish';
       pub.type = 'button';
       pub.textContent = '📚 Publish to the library';
-      pub.addEventListener('click', async () => {
-        if (!confirm('Publish "' + book.title + '" to the library? Everyone can read it there, and it can no longer be changed.')) return;
-        pub.disabled = true;
-        setStatus('<span class="spinner"></span>Publishing to the library…');
-        try {
-          const res = await fetch('/v1/books/' + bookId + '/publish', { method: 'POST' });
-          const data = await res.json().catch(() => ({}));
-          if (res.ok && data.ok) { location.href = '/library'; return; }
-          const f = friendlyError(res, data);
-          setStatus(f.text, f.cls);
-          pub.disabled = false;
-        } catch {
-          setStatus('Could not reach the server. Check your connection and try again.', 'error');
-          pub.disabled = false;
-        }
-      });
+      pub.addEventListener('click', () => confirmPublish(pub));
       return pub;
+    }
+
+    /** Publishing is public: make sure the child really understands before it
+     *  leaves their shelf. */
+    function confirmPublish(pub) {
+      const dlg = openTaskDialog('📚 Share with everyone?');
+      const warn = document.createElement('div');
+      warn.className = 'publishwarn';
+      warn.innerHTML =
+        '<div class="pw-icon">👀</div>' +
+        '<p><strong>Everyone with a Harbor House account will be able to read ' +
+        '“' + escapeHtml(book.title) + '”.</strong></p>' +
+        '<p>They can open it, read it aloud, and make their own copy of it. ' +
+        'Your name on the cover goes with it.</p>' +
+        '<p>Your book also becomes <strong>locked</strong> — you can’t change the words ' +
+        'or pictures again unless you pull it back off the library.</p>';
+      dlg.modal.appendChild(warn);
+      const actions = document.createElement('div');
+      actions.className = 'music-actions';
+      const go = document.createElement('button');
+      go.type = 'button';
+      go.className = 'cta publish';
+      go.textContent = '📚 Yes, publish it';
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'linkbtn';
+      cancel.textContent = '✕ Not yet';
+      cancel.addEventListener('click', () => { setStatus(''); dlg.close(); });
+      actions.appendChild(go);
+      actions.appendChild(cancel);
+      dlg.modal.appendChild(actions);
+      go.addEventListener('click', async () => {
+        go.disabled = true;
+        dlg.close();
+        await doPublish(pub);
+      });
+    }
+
+    async function doPublish(pub) {
+      pub.disabled = true;
+      setStatus('<span class="spinner"></span>Publishing to the library…');
+      try {
+        const res = await fetch('/v1/books/' + bookId + '/publish', { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) { location.href = '/library'; return; }
+        const f = friendlyError(res, data);
+        setStatus(f.text, f.cls);
+        pub.disabled = false;
+      } catch {
+        setStatus('Could not reach the server. Check your connection and try again.', 'error');
+        pub.disabled = false;
+      }
     }
 
     if (!editMode) {
@@ -3543,7 +3724,12 @@ function readerClientJs(): string {
         if (dlg) { dlg.close(); dlg = null; progress = null; }
         // Only announce (and reload for instant playback) if the child actually
         // had to wait — a book that was ready all along stays quiet.
-        if (waited) { await hydrate(); setStatus('🎙️ The voices are ready — press “Read to me” to listen!'); }
+        if (waited) {
+          await hydrate();
+          setStatus(st.blocked
+            ? '🎙️ The voices are ready! (' + st.blocked + ' part could not be recorded — the words there need changing.)'
+            : '🎙️ The voices are ready — press “Read to me” to listen!');
+        }
         return true;
       }
       waited = true;

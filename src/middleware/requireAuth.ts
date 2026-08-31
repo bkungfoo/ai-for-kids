@@ -40,7 +40,7 @@ export function experimentalState(req: Request): {
     eligible: experimentalEligible(req),
     enabled: session?.expFeatures ?? false,
     prompted: session?.expPrompted ?? false,
-    safetyLevel: safetyLevelFor(req) ?? 'BLOCK_LOW_AND_ABOVE',
+    safetyLevel: safetyLevelFor(req) ?? 'BLOCK_MEDIUM_AND_ABOVE',
   };
 }
 
@@ -75,6 +75,20 @@ export function experimentalEnabled(req: Request): boolean {
  * 'public' for token-invited outsiders). Undefined when signed out. */
 export function currentUniverse(req: Request): Universe | undefined {
   return accountUniverse(currentUser(req));
+}
+
+/**
+ * The universe an account may view the ANALYTICS dashboard for, or undefined
+ * when it is not an analytics admin. The primary account (HarborHouse) sees
+ * the harborhouse universe; the public universe's 'admin' account sees the
+ * public universe. Each admin only ever sees their own universe's data.
+ */
+export function analyticsUniverseFor(req: Request): Universe | undefined {
+  const user = currentUser(req);
+  if (!user) return undefined;
+  if (user === config.auth.accounts[0]?.username) return 'harborhouse';
+  if (user === 'admin' && accountUniverse(user) === 'public') return 'public';
+  return undefined;
 }
 
 /** Gate for Harbor-House-only surfaces (music, voices, …): the public

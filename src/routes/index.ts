@@ -1,6 +1,10 @@
 import { Router, type Request, type Response } from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { currentUniverse, experimentalState, requireApiAuth, requireHarborUniverse, safetyLevelFor, setExperimental } from '../middleware/requireAuth.js';
+import { analyticsUniverseFor, currentUniverse, currentUser, experimentalEligible, experimentalState, requireApiAuth, requireHarborUniverse, safetyLevelFor, setExperimental } from '../middleware/requireAuth.js';
+import { analyticsMiddleware } from '../analytics/middleware.js';
+import { appendEvent } from '../analytics/store.js';
+import { activityForPage } from '../analytics/classify.js';
+import { buildSummary, buildSeries, type SeriesMetric } from '../analytics/summary.js';
 import { claudeCodeProvider } from '../providers/claudeCode.js';
 import { elevenLabsProvider } from '../providers/elevenlabs.js';
 import { geminiProvider } from '../providers/gemini.js';
@@ -41,6 +45,56 @@ router.get('/health', (_req: Request, res: Response) => {
 
 // All /v1 generation endpoints require a signed-in session.
 router.use('/v1', requireApiAuth);
+// Usage logging for the analytics dashboard (after auth, before features).
+router.use('/v1', analyticsMiddleware);
+
+// --- Analytics ---------------------------------------------------------------
+// Heartbeat: pages ping every 30s WHILE the user is actively interacting
+// (input events + tab visible), so reading time counts toward time-on-site
+// without any API traffic. See summary.ts for the idle-limit semantics.
+router.post('/v1/analytics/ping', (req: Request, res: Response) => {
+  const page = (req.body as { path?: unknown } | undefined)?.path;
+  appendEvent({
+    t: Date.now(),
+    user: currentUser(req)!,
+    universe: currentUniverse(req) ?? 'harborhouse',
+    kind: 'ping',
+    activity: activityForPage(typeof page === 'string' ? page : '/'),
+  });
+  res.json({ ok: true });
+});
+
+// Time series for the dashboard's line chart: ONE measure, split into
+// same-unit series (never two y-scales), bucketed at the requested window.
+router.get(
+  '/v1/analytics/series',
+  asyncHandler(async (req, res) => {
+    const universe = analyticsUniverseFor(req);
+    if (!universe) {
+      res.status(404).json({ ok: false, error: 'Not found' });
+      return;
+    }
+    const days = Math.min(90, Math.max(1, Number(req.query.days) || 14));
+    const bucket = Math.min(86400, Math.max(600, Number(req.query.bucket) || 3600));
+    const allowed = ['events', 'genai', 'engaged', 'blocked', 'users'];
+    const metric = (allowed.includes(String(req.query.metric)) ? req.query.metric : 'genai') as SeriesMetric;
+    res.json({ ok: true, ...(await buildSeries(days, bucket, metric, universe)) });
+  }),
+);
+
+// The dashboard's data — strictly the primary (HarborHouse) account.
+router.get(
+  '/v1/analytics/summary',
+  asyncHandler(async (req, res) => {
+    const universe = analyticsUniverseFor(req);
+    if (!universe) {
+      res.status(404).json({ ok: false, error: 'Not found' });
+      return;
+    }
+    const days = Math.min(90, Math.max(1, Number(req.query.days) || 14));
+    res.json({ ok: true, universe, summary: await buildSummary(days, universe) });
+  }),
+);
 
 // --- Experimental features (session-scoped) ----------------------------------
 // The landing page asks the PRIMARY account whether to enable experimental

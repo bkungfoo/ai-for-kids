@@ -41,7 +41,7 @@ export function createSession(
     expiresAt: Date.now() + ttlMs,
     expFeatures: false,
     expPrompted: false,
-    safetyLevel: 'BLOCK_LOW_AND_ABOVE',
+    safetyLevel: 'BLOCK_MEDIUM_AND_ABOVE',
   });
   return token;
 }
