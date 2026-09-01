@@ -59,20 +59,66 @@ working.
 
 ---
 
-## 2. Prepare the mini PC
+## 2. Prepare the mini PC (Windows + WSL2)
+
+The mini PC runs Windows. Harbor House is a Linux app (systemd service, bash
+scripts), so it runs inside **WSL2** — a real Ubuntu on the same machine. The
+migration scripts then run unchanged. Do this once:
+
+### 2.1 Install Ubuntu under WSL2
+
+From an **Administrator PowerShell**:
+
+```powershell
+wsl --install -d Ubuntu
+# reboot if it asks; set a Linux username + password when Ubuntu first opens
+```
+
+### 2.2 Turn on systemd (required)
+
+WSL2 does **not** run systemd by default, and the app is installed as a systemd
+service. Inside Ubuntu:
 
 ```bash
-# Node 20+ (the VM runs v20.19.2)
-node -v    # if missing:  sudo apt install -y nodejs npm   (or use nvm)
+sudo tee /etc/wsl.conf >/dev/null <<'EOF'
+[boot]
+systemd=true
+EOF
+```
 
-cd ~/code/ai-for-kids          # your clone
-git fetch origin
+Then from **PowerShell** (fully restarts the Linux VM):
+
+```powershell
+wsl --shutdown
+```
+
+Reopen Ubuntu and confirm: `systemctl is-system-running` should print `running`
+or `degraded` (both fine). If it errors, systemd isn't on yet — the import
+script also checks this and refuses to run rather than half-installing.
+
+### 2.3 Clone **inside** WSL, not on the Windows drive
+
+Clone into the Linux home (`~`), **not** `/mnt/c/...`. On `/mnt/c` the exec bit
+is lost, file modes are wrong, builds crawl, and Windows git may rewrite the
+shell scripts to CRLF (bash then fails with `$'\r': command not found`). The
+repo now ships a `.gitattributes` that pins `*.sh` to LF, but a Linux-side clone
+avoids the whole class of problem:
+
+```bash
+sudo apt update && sudo apt install -y git curl
+# Node 20+ (the VM runs v20.19.2):
+node -v || (curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs)
+
+git clone git@github.com:bkungfoo/ai-for-kids.git ~/code/ai-for-kids
+cd ~/code/ai-for-kids
 git checkout main
-git pull
 ```
 
 > `main` has everything — the analytics dashboard, print, the public universe
 > and these migration scripts were all merged in PR #5.
+
+> Already cloned on the Windows side (`/mnt/c/...`)? Re-clone into `~` inside
+> WSL. The import script hard-stops if it's run from `/mnt/`.
 
 ---
 
@@ -86,9 +132,11 @@ cd ~/code/ai-for-kids
 # -> /tmp/harbor-house-export/harbor-house-<stamp>.tar.gz  (+ .sha256)
 ```
 
-**On the mini PC** (it pulls; no need to expose the mini PC):
+**On the mini PC — inside WSL Ubuntu** (it pulls; no need to expose the mini PC):
 
 ```bash
+# install the gcloud CLI inside WSL once, if you don't have it:
+#   curl -fsSL https://sdk.cloud.google.com | bash && exec -l $SHELL && gcloud init
 gcloud compute scp harbor-house-ai-sandbox:/tmp/harbor-house-export/harbor-house-<stamp>.tar.gz . --zone=us-west1-b
 gcloud compute scp harbor-house-ai-sandbox:/tmp/harbor-house-export/harbor-house-<stamp>.tar.gz.sha256 . --zone=us-west1-b
 
@@ -121,8 +169,16 @@ terminates TLS (`.env` already has `TRUST_PROXY=true`, `COOKIE_SECURE=true` —
 No port forwarding, no exposing your home IP, works behind CGNAT, and TLS is
 Cloudflare's problem.
 
+Run cloudflared **inside WSL**, next to the app — then it reaches
+`http://127.0.0.1:5000` in the same network namespace and installs as a systemd
+service just like Harbor House.
+
 ```bash
-# install cloudflared, then:
+# install cloudflared inside Ubuntu:
+curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" | sudo tee /etc/apt/sources.list.d/cloudflared.list
+sudo apt update && sudo apt install -y cloudflared
+
 cloudflared tunnel login
 cloudflared tunnel create harbor-house
 cloudflared tunnel route dns harbor-house harbor-house.brianfoo.ai
@@ -150,6 +206,23 @@ Either way the DNS record for `harbor-house.brianfoo.ai` must exist in the
 Cloudflare zone — this is also what fixes the current outage (the domain
 currently returns **no NS/SOA at all**, so nothing resolves; make sure the
 registrar's nameservers point at Cloudflare).
+
+### Make it survive a reboot (WSL does not auto-start)
+
+systemd (from §2.2) keeps `harbor-house` and `cloudflared` running **while WSL is
+up** — but WSL itself only starts when someone opens Ubuntu. On a headless home
+server that means nothing serves after a Windows reboot until you log in and open
+a terminal. Fix it with a Windows **Task Scheduler** job that boots WSL at
+startup. In an Administrator PowerShell:
+
+```powershell
+schtasks /create /tn "Start WSL Harbor House" /sc onstart /ru SYSTEM ^
+  /tr "wsl.exe -d Ubuntu -u root -e /bin/true"
+```
+
+Running any command boots the WSL VM, which starts systemd, which starts both
+services. (Also set Windows itself to log in / power on automatically if you want
+zero-touch after a power cut.)
 
 ---
 

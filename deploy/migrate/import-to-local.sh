@@ -35,6 +35,38 @@ if [[ ! -f package.json ]] || ! grep -q '"child-safe-ai"' package.json; then
   exit 1
 fi
 
+# --- 0b. WSL / systemd preflight (fail fast, before touching any data) --------
+# On the mini PC this runs inside WSL2 Ubuntu. Two things there break the install
+# LATE (after data is restored and built) unless we catch them now.
+IS_WSL=0
+grep -qi microsoft /proc/version 2>/dev/null && IS_WSL=1
+
+if [[ "$IS_WSL" == "1" ]]; then
+  echo "==> WSL2 detected"
+  # (a) The repo must live on the Linux filesystem, not /mnt/c — otherwise the
+  #     exec bit and file modes are wrong and builds crawl.
+  case "$REPO" in
+    /mnt/*) echo "!! this repo is under $REPO (a Windows drive)." >&2
+            echo "!! clone it inside WSL instead, e.g. ~/code/ai-for-kids, and re-run." >&2
+            exit 1 ;;
+  esac
+fi
+
+# (b) systemd must be the init system, or 'systemctl' cannot register the service.
+#     /run/systemd/system is the canonical "booted with systemd" marker (sd_booted).
+#     WSL2 needs 'systemd=true' in /etc/wsl.conf then 'wsl --shutdown' once.
+if [[ ! -d /run/systemd/system ]]; then
+  echo "!! systemd is not the init system here — 'systemctl' will not work." >&2
+  if [[ "$IS_WSL" == "1" ]]; then
+    echo "!! enable it once: add these two lines to /etc/wsl.conf" >&2
+    echo "     [boot]" >&2
+    echo "     systemd=true" >&2
+    echo "!! then, from Windows PowerShell:  wsl --shutdown" >&2
+    echo "!! reopen Ubuntu and re-run this script." >&2
+  fi
+  exit 1
+fi
+
 # --- 1. verify the bundle ----------------------------------------------------
 if [[ -f "$TARBALL.sha256" ]]; then
   echo "==> verifying checksum …"
